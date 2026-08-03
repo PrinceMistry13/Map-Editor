@@ -1,5 +1,6 @@
 import { createFloorPlanOverlayClass } from './FloorPlanOverlay';
 import { extractForegroundMask, traceContour, simplifyPolygon } from '../utils/imageBoundary';
+import { solveHomography, mapPoint } from '../utils/homography';
 
 export default class FloorPlanManager {
   constructor(map, callbacks = {}) {
@@ -8,10 +9,18 @@ export default class FloorPlanManager {
     this.overlays = new Map();
     this.selectedId = null;
     this.FloorPlanOverlay = createFloorPlanOverlayClass();
+    this.currentMode = 'manual';
+  }
+
+  setMode(mode) {
+    this.currentMode = mode;
+    this.overlays.forEach(entry => {
+      entry.overlay.update({ mode });
+    });
   }
 
   // Preloads the image to get natural dimensions
-  async addFloorPlan(id, url, center, scale = 1, rotationDeg = 0, opacity = 1, timestamp = null, layerId = 'layer-1') {
+  async addFloorPlan(id, url, center, scale = 1, rotationDeg = 0, opacity = 1, timestamp = null, layerId = 'layer-1', distortedCorners = null) {
     return new Promise((resolve, reject) => {
       const img = new Image();
       img.crossOrigin = 'anonymous';
@@ -28,6 +37,7 @@ export default class FloorPlanManager {
 
         const overlay = new this.FloorPlanOverlay({
           id, url, center, widthMeters, heightMeters, rotationDeg, opacity,
+          distortedCorners, mode: this.currentMode,
           map: this.map,
           manager: this
         });
@@ -49,7 +59,7 @@ export default class FloorPlanManager {
       lat: (data.bounds.sw.lat + data.bounds.ne.lat) / 2,
       lng: (data.bounds.sw.lng + data.bounds.ne.lng) / 2
     };
-    this.addFloorPlan(id, data.floorplan, center, data.scale, data.rotation, data.opacity, data.timestamp, data.layerId || 'layer-1');
+    this.addFloorPlan(id, data.floorplan, center, data.scale, data.rotation, data.opacity, data.timestamp, data.layerId || 'layer-1', data.distortedCorners || null);
   }
 
   // Generate the axis-aligned bounding box from the rotated corners
@@ -194,11 +204,34 @@ export default class FloorPlanManager {
       const scaleX = overlay.widthMeters / W;
       const scaleY = overlay.heightMeters / H;
 
+      let H_matrix = null;
+      if (overlay.distortedCorners) {
+        const dc = overlay.distortedCorners;
+        const src = [
+          {x: 0, y: 0},
+          {x: W, y: 0},
+          {x: W, y: H},
+          {x: 0, y: H}
+        ];
+        const dst = [
+          {x: dc.nw.lng, y: dc.nw.lat},
+          {x: dc.ne.lng, y: dc.ne.lat},
+          {x: dc.se.lng, y: dc.se.lat},
+          {x: dc.sw.lng, y: dc.sw.lat}
+        ];
+        H_matrix = solveHomography(src, dst);
+      }
+
       return contourPx.map((p) => {
-        // Pixel (0,0) is the image's top-left → north-west corner, so flip Y.
-        const dx = (p.x - W / 2) * scaleX;
-        const dy = (H / 2 - p.y) * scaleY;
-        return this.pointToLatLng(overlay, dx, dy);
+        if (H_matrix) {
+          const pt = mapPoint(p.x, p.y, H_matrix);
+          return { lat: pt.y, lng: pt.x };
+        } else {
+          // Pixel (0,0) is the image's top-left → north-west corner, so flip Y.
+          const dx = (p.x - W / 2) * scaleX;
+          const dy = (H / 2 - p.y) * scaleY;
+          return this.pointToLatLng(overlay, dx, dy);
+        }
       });
     } catch (err) {
       console.warn('Floorplan boundary trace failed, falling back to rectangle:', err);
@@ -217,6 +250,7 @@ export default class FloorPlanManager {
         floorplan: entry.url,
         bounds,
         corners: cornersObj,
+        distortedCorners: entry.overlay.distortedCorners,
         rotation: entry.overlay.rotationDeg,
         scale,
         opacity: entry.overlay.opacity,
@@ -259,7 +293,8 @@ export default class FloorPlanManager {
           center: startState.origCenter,
           widthMeters: startState.origWidth,
           heightMeters: startState.origHeight,
-          rotationDeg: startState.origRot
+          rotationDeg: startState.origRot,
+          distortedCorners: startState.origDistortedCorners ? { ...startState.origDistortedCorners } : null
         });
         this.callbacks.onChange && this.callbacks.onChange(id);
       },
@@ -345,11 +380,15 @@ export default class FloorPlanManager {
     // On lock (not unlock), hand the exact rotated-rectangle corners to
     // whoever wants to auto-plot the boundary polygon.
     if (isLocked) {
-      const traced = await this.computeImageBoundary(id);
-      let path = traced;
+      let path = await this.computeImageBoundary(id);
       if (!path) {
-        const c = this.computeCorners(entry.overlay);
-        path = [c.nw, c.ne, c.se, c.sw];
+        if (entry.overlay.distortedCorners) {
+          const dc = entry.overlay.distortedCorners;
+          path = [dc.nw, dc.ne, dc.se, dc.sw];
+        } else {
+          const c = this.computeCorners(entry.overlay);
+          path = [c.nw, c.ne, c.se, c.sw];
+        }
       }
       this.callbacks.onLock && this.callbacks.onLock(id, path, entry);
     }
@@ -375,6 +414,7 @@ export default class FloorPlanManager {
       rotation: entry.overlay.rotationDeg,
       scale,
       opacity: entry.overlay.opacity,
+      distortedCorners: entry.overlay.distortedCorners,
       timestamp: entry.timestamp || new Date().toISOString()
     };
     const blob = new Blob([JSON.stringify(data, null, 2)], { type: "application/json" });

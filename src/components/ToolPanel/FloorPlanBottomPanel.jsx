@@ -80,6 +80,12 @@ export default function FloorPlanBottomPanel() {
         >
           GCP Mode
         </button>
+        <button
+          className={`fp-bp-btn ${floorPlanMode === 'distort' ? 'active' : ''}`}
+          onClick={() => setFloorPlanMode('distort')}
+        >
+          Distort
+        </button>
       </div>
 
       <div className="fp-bp-divider" />
@@ -87,13 +93,13 @@ export default function FloorPlanBottomPanel() {
       {/* Container for all dynamic content to ensure constant width */}
       <div style={{ display: 'flex', alignItems: 'center', position: 'relative' }}>
         
-        {/* Manual controls (always rendered to reserve width, but hidden when not in manual mode) */}
+        {/* Manual controls (always rendered to reserve width, but hidden when not in manual mode/distort) */}
         <div style={{
           display: 'flex', 
           alignItems: 'center', 
           gap: '16px',
-          visibility: floorPlanMode === 'manual' ? 'visible' : 'hidden',
-          pointerEvents: floorPlanMode === 'manual' ? 'auto' : 'none'
+          visibility: (floorPlanMode === 'manual' || floorPlanMode === 'distort') ? 'visible' : 'hidden',
+          pointerEvents: (floorPlanMode === 'manual' || floorPlanMode === 'distort') ? 'auto' : 'none'
         }}>
           <div className="fp-bp-group">
             <span className="fp-bp-label">Opacity</span>
@@ -114,8 +120,8 @@ export default function FloorPlanBottomPanel() {
           </div>
         </div>
 
-        {/* GCP hint overlay */}
-        {floorPlanMode !== 'manual' && (
+        {/* Hint overlays */}
+        {floorPlanMode === 'gcp' && (
           <div className="fp-bp-gcp-hint" style={{ position: 'absolute', left: 0, top: '50%', transform: 'translateY(-50%)' }}>
             Use the left panel to place Ground Control Points.
           </div>

@@ -284,6 +284,7 @@ function MapWorkspaceInner() {
     activeTool, setActiveTool,
     selectedPolygonEntry, setSelectedPolygonEntry,
     selectedFloorPlanId, setSelectedFloorPlanId,
+    selectedLayerItemId, setSelectedLayerItemId,
     floorPlanMode,
     gcpPoints, setGCPPoints,
     pendingImgPt, setPendingImgPt,
@@ -357,6 +358,7 @@ function MapWorkspaceInner() {
       polygonManagerRef.current = new PolygonManager(mapRef.current, {
         onSelect: (entry, latLng) => {
           setSelectedPolygonEntry(entry);
+          setSelectedLayerItemId(entry ? entry.id : null);
           if (!entry) {
             // Explicit deselect — close popup and clear its readouts.
             setPolygonPopupPos(null);
@@ -365,6 +367,10 @@ function MapWorkspaceInner() {
             lastSelectedPolygonIdRef.current = null;
             return;
           }
+
+          // Deselect others to guarantee single active selection globally
+          pinManagerRef.current?.deselect();
+          floorPlanManagerRef.current?.onSelect(null);
 
           const isNewSelection = entry.id !== lastSelectedPolygonIdRef.current;
           lastSelectedPolygonIdRef.current = entry.id;
@@ -405,12 +411,17 @@ function MapWorkspaceInner() {
       pinManagerRef.current = new PinManager(mapRef.current, {
         onSelect: (entry, latLng) => {
           setSelectedPinEntry(entry);
+          setSelectedLayerItemId(entry ? entry.id : null);
           if (!entry) { 
             setPinPopupPos(null); 
             setPinCoordsCopied(false); 
             lastSelectedPinIdRef.current = null;
             return; 
           }
+
+          // Deselect others to guarantee single active selection globally
+          polygonManagerRef.current?.deselect();
+          floorPlanManagerRef.current?.onSelect(null);
 
           const isNewSelection = entry.id !== lastSelectedPinIdRef.current;
           lastSelectedPinIdRef.current = entry.id;
@@ -442,6 +453,14 @@ function MapWorkspaceInner() {
       floorPlanManagerRef.current = new FloorPlanManager(mapRef.current, {
         onSelect: (id) => {
           setSelectedFloorPlanId(id);
+          setSelectedLayerItemId(id || null);
+          
+          if (id) {
+            // Deselect others to guarantee single active selection globally
+            polygonManagerRef.current?.deselect();
+            pinManagerRef.current?.deselect();
+          }
+
           const isNewSelection = id !== lastSelectedFloorPlanIdRef.current;
           lastSelectedFloorPlanIdRef.current = id || null;
           
@@ -491,6 +510,14 @@ function MapWorkspaceInner() {
       });
     }
   }, [mapReady, mapInstance, pushThunk, setSelectedFloorPlanId, floorPlanManagerRef, project.floorPlans]);
+
+  // Sync floorPlanMode to FloorPlanManager
+  useEffect(() => {
+    if (floorPlanManagerRef.current) {
+      floorPlanManagerRef.current.setMode(floorPlanMode);
+    }
+  }, [floorPlanMode, floorPlanManagerRef]);
+
 
   // ── Build map options once ──────────────────────────────────────────────────
   if (mapsReady && !mapOptions.current) {

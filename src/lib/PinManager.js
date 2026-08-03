@@ -118,12 +118,11 @@ export default class PinManager {
         const before = entry.name;
         entry.name = name;
         this.callbacks.pushHistory && this.callbacks.pushHistory({
-            undo: () => { entry.name = before; this.callbacks.onChange && this.callbacks.onChange(); this.callbacks.onSelect && this.callbacks.onSelect({ ...entry }); },
-            redo: () => { entry.name = name; this.callbacks.onChange && this.callbacks.onChange(); this.callbacks.onSelect && this.callbacks.onSelect({ ...entry }); },
+            undo: () => { entry.name = before; this.callbacks.onChange && this.callbacks.onChange(); if (this.selectedId === id) this.callbacks.onSelect && this.callbacks.onSelect({ ...entry }); },
+            redo: () => { entry.name = name; this.callbacks.onChange && this.callbacks.onChange(); if (this.selectedId === id) this.callbacks.onSelect && this.callbacks.onSelect({ ...entry }); },
         });
         this.callbacks.onChange && this.callbacks.onChange();
-        // No latLng — keeps popup anchored, same fix as PolygonManager.rename().
-        this.callbacks.onSelect && this.callbacks.onSelect({ ...entry });
+        if (this.selectedId === id) this.callbacks.onSelect && this.callbacks.onSelect({ ...entry });
     }
 
     setColor(id, color) {
@@ -133,11 +132,11 @@ export default class PinManager {
         entry.color = color;
         entry.marker.setIcon(pinSvgIcon(color, entry.styleMode === 'custom' ? entry.imageDataUrl : null));
         this.callbacks.pushHistory && this.callbacks.pushHistory({
-            undo: () => { entry.color = before; entry.marker.setIcon(pinSvgIcon(before, entry.styleMode === 'custom' ? entry.imageDataUrl : null)); this.callbacks.onChange && this.callbacks.onChange(); this.callbacks.onSelect && this.callbacks.onSelect({ ...entry }); },
-            redo: () => { entry.color = color; entry.marker.setIcon(pinSvgIcon(color, entry.styleMode === 'custom' ? entry.imageDataUrl : null)); this.callbacks.onChange && this.callbacks.onChange(); this.callbacks.onSelect && this.callbacks.onSelect({ ...entry }); },
+            undo: () => { entry.color = before; entry.marker.setIcon(pinSvgIcon(before, entry.styleMode === 'custom' ? entry.imageDataUrl : null)); this.callbacks.onChange && this.callbacks.onChange(); if (this.selectedId === id) this.callbacks.onSelect && this.callbacks.onSelect({ ...entry }); },
+            redo: () => { entry.color = color; entry.marker.setIcon(pinSvgIcon(color, entry.styleMode === 'custom' ? entry.imageDataUrl : null)); this.callbacks.onChange && this.callbacks.onChange(); if (this.selectedId === id) this.callbacks.onSelect && this.callbacks.onSelect({ ...entry }); },
         });
         this.callbacks.onChange && this.callbacks.onChange();
-        this.callbacks.onSelect && this.callbacks.onSelect({ ...entry });
+        if (this.selectedId === id) this.callbacks.onSelect && this.callbacks.onSelect({ ...entry });
     }
 
     setStyle(id, styleMode, imageDataUrl) {
@@ -158,18 +157,18 @@ export default class PinManager {
                 entry.imageDataUrl = beforeImg;
                 updateIcon(beforeStyle, beforeImg);
                 this.callbacks.onChange && this.callbacks.onChange();
-                this.callbacks.onSelect && this.callbacks.onSelect({ ...entry });
+                if (this.selectedId === id) this.callbacks.onSelect && this.callbacks.onSelect({ ...entry });
             },
             redo: () => {
                 entry.styleMode = styleMode;
                 if (imageDataUrl !== undefined) entry.imageDataUrl = imageDataUrl;
                 updateIcon(styleMode, entry.imageDataUrl);
                 this.callbacks.onChange && this.callbacks.onChange();
-                this.callbacks.onSelect && this.callbacks.onSelect({ ...entry });
+                if (this.selectedId === id) this.callbacks.onSelect && this.callbacks.onSelect({ ...entry });
             },
         });
         this.callbacks.onChange && this.callbacks.onChange();
-        this.callbacks.onSelect && this.callbacks.onSelect({ ...entry });
+        if (this.selectedId === id) this.callbacks.onSelect && this.callbacks.onSelect({ ...entry });
     }
 
     deletePin(id, skipHistory) {

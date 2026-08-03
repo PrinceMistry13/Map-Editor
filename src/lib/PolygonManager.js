@@ -129,18 +129,18 @@ export default class PolygonManager {
       undo: () => {
         entry.name = before;
         this.callbacks.onChange && this.callbacks.onChange();
-        this.callbacks.onSelect && this.callbacks.onSelect({ ...entry });
+        if (this.selectedId === id) this.callbacks.onSelect && this.callbacks.onSelect({ ...entry });
       },
       redo: () => {
         entry.name = name;
         this.callbacks.onChange && this.callbacks.onChange();
-        this.callbacks.onSelect && this.callbacks.onSelect({ ...entry });
+        if (this.selectedId === id) this.callbacks.onSelect && this.callbacks.onSelect({ ...entry });
       },
     });
     this.callbacks.onChange && this.callbacks.onChange();
     // IMPORTANT: no latLng arg here. Passing one was wiping the popup
     // position on every keystroke, making the rename box "pop off" while typing.
-    this.callbacks.onSelect && this.callbacks.onSelect({ ...entry });
+    if (this.selectedId === id) this.callbacks.onSelect && this.callbacks.onSelect({ ...entry });
   }
 
   // 'landmark' | 'project' — lets the user classify a boundary after the fact,
@@ -162,17 +162,42 @@ export default class PolygonManager {
         entry.category = before;
         applyColor(before);
         this.callbacks.onChange && this.callbacks.onChange();
-        this.callbacks.onSelect && this.callbacks.onSelect({ ...entry });
+        if (this.selectedId === id) this.callbacks.onSelect && this.callbacks.onSelect({ ...entry });
       },
       redo: () => {
         entry.category = category;
         applyColor(category);
         this.callbacks.onChange && this.callbacks.onChange();
-        this.callbacks.onSelect && this.callbacks.onSelect({ ...entry });
+        if (this.selectedId === id) this.callbacks.onSelect && this.callbacks.onSelect({ ...entry });
       },
     });
     this.callbacks.onChange && this.callbacks.onChange();
-    this.callbacks.onSelect && this.callbacks.onSelect({ ...entry });
+    if (this.selectedId === id) this.callbacks.onSelect && this.callbacks.onSelect({ ...entry });
+  }
+
+  setColor(id, color) {
+    const entry = this.polygons.get(id);
+    if (!entry) return;
+    const before = entry.color;
+    entry.color = color;
+    entry.gPolygon.setOptions({ strokeColor: color, fillColor: color });
+
+    this.callbacks.pushHistory && this.callbacks.pushHistory({
+      undo: () => {
+        entry.color = before;
+        entry.gPolygon.setOptions({ strokeColor: before, fillColor: before });
+        this.callbacks.onChange && this.callbacks.onChange();
+        if (this.selectedId === id) this.callbacks.onSelect && this.callbacks.onSelect({ ...entry });
+      },
+      redo: () => {
+        entry.color = color;
+        entry.gPolygon.setOptions({ strokeColor: color, fillColor: color });
+        this.callbacks.onChange && this.callbacks.onChange();
+        if (this.selectedId === id) this.callbacks.onSelect && this.callbacks.onSelect({ ...entry });
+      },
+    });
+    this.callbacks.onChange && this.callbacks.onChange();
+    if (this.selectedId === id) this.callbacks.onSelect && this.callbacks.onSelect({ ...entry });
   }
 
   deletePolygon(id, skipHistory) {

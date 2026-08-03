@@ -11,6 +11,13 @@ const EyeIcon = () => (
   </svg>
 );
 
+const PaintBrushIcon = () => (
+  <svg viewBox="0 0 24 24" width="12" height="12" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+    <path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z"></path>
+    <path d="M10.5 13.5l-4.5 4.5c-2.5 2.5-1 5 1.5 5h1a4 4 0 0 0 4-4v-1.5"></path>
+  </svg>
+);
+
 const EyeOffIcon = () => (
   <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
     <path d="M17.94 17.94A10.07 10.07 0 0 1 12 20c-7 0-11-8-11-8a18.45 18.45 0 0 1 5.06-5.94M9.9 4.24A9.12 9.12 0 0 1 12 4c7 0 11 8 11 8a18.5 18.5 0 0 1-2.16 3.19m-6.72-1.07a3 3 0 1 1-4.24-4.24"></path>
@@ -71,17 +78,16 @@ export default function LayersPanel({ tick = 0 }) {
     addLayer, deleteLayer, updateLayer, toggleLayerVisibility, reorderLayers,
     polygonManagerRef, pinManagerRef, floorPlanManagerRef,
     getExportProject,
-    selectedId,
-    selectedPolygonEntry,
-    selectedFloorPlanId,
+    selectedLayerItemId,
   } = useWorkspace();
 
   const [expandedLayers, setExpandedLayers] = useState({});
   const [menuOpenId, setMenuOpenId] = useState(null);
+  const [styleMenuOpenId, setStyleMenuOpenId] = useState(null);
 
   // Close menu when clicking outside
   useEffect(() => {
-    const handleDocClick = () => setMenuOpenId(null);
+    const handleDocClick = () => { setMenuOpenId(null); setStyleMenuOpenId(null); };
     document.addEventListener('click', handleDocClick);
     return () => document.removeEventListener('click', handleDocClick);
   }, []);
@@ -94,6 +100,13 @@ export default function LayersPanel({ tick = 0 }) {
   const handleMenuClick = (id, e) => {
     e.stopPropagation();
     setMenuOpenId(prev => (prev === id ? null : id));
+    setStyleMenuOpenId(null);
+  };
+
+  const handleStyleMenuClick = (id, e) => {
+    e.stopPropagation();
+    setStyleMenuOpenId(prev => (prev === id ? null : id));
+    setMenuOpenId(null);
   };
 
   const handleLayerClick = (id) => {
@@ -172,6 +185,30 @@ export default function LayersPanel({ tick = 0 }) {
     const pins = pnmState.filter(f => f.layerId === layerId).map(f => ({ ...f, type: 'pin' }));
     const fps = fpState.filter(f => f.layerId === layerId).map(f => ({ ...f, type: 'floorplan' }));
     return [...fps, ...polys, ...pins];
+  };
+
+  const handleLayerColorChange = (layer, color) => {
+    updateLayer(layer.id, { color });
+    if (layer.styleMode === 'uniform') {
+      const children = getLayerChildren(layer.id);
+      children.forEach(child => {
+        if (child.type === 'polygon' && polygonManagerRef.current) polygonManagerRef.current.setColor(child.id, color);
+        if (child.type === 'pin' && pinManagerRef.current) pinManagerRef.current.setColor(child.id, color);
+      });
+    }
+  };
+
+  const handleStyleModeToggle = (layer, newMode) => {
+    if (layer.styleMode === newMode) return;
+    updateLayer(layer.id, { styleMode: newMode });
+    if (newMode === 'uniform') {
+      const children = getLayerChildren(layer.id);
+      children.forEach(child => {
+        if (child.type === 'polygon' && polygonManagerRef.current) polygonManagerRef.current.setColor(child.id, layer.color);
+        if (child.type === 'pin' && pinManagerRef.current) pinManagerRef.current.setColor(child.id, layer.color);
+      });
+    }
+    setStyleMenuOpenId(null);
   };
 
   const selectChild = (child) => {
@@ -255,12 +292,14 @@ export default function LayersPanel({ tick = 0 }) {
                 >
                   {layer.visible ? <EyeIcon /> : <EyeOffIcon />}
                 </button>
-                <div className="lp-color-swatch-wrap" onClick={(e) => e.stopPropagation()}>
+                <div className="lp-color-swatch-wrap" onClick={(e) => e.stopPropagation()} onWheel={(e) => e.stopPropagation()} onPointerDown={(e) => e.stopPropagation()}>
                   <input
                     type="color"
                     className="lp-color-swatch"
                     value={layer.color}
-                    onChange={(e) => updateLayer(layer.id, { color: e.target.value })}
+                    onChange={(e) => handleLayerColorChange(layer, e.target.value)}
+                    onWheel={(e) => e.stopPropagation()}
+                    onPointerDown={(e) => e.stopPropagation()}
                   />
                 </div>
                 <input
@@ -295,10 +334,20 @@ export default function LayersPanel({ tick = 0 }) {
 
               {isExpanded && children.length > 0 && (
                 <div className="lp-children">
+                  <div className="lp-style-menu-wrap">
+                    <div className="lp-style-toggle" onClick={(e) => handleStyleMenuClick(layer.id, e)}>
+                      <PaintBrushIcon />
+                      {layer.styleMode === 'uniform' ? 'Uniform style' : 'Individual styles'}
+                    </div>
+                    {styleMenuOpenId === layer.id && (
+                      <div className="lp-style-dropdown">
+                        <button className="lp-dropdown-item" onClick={(e) => { e.stopPropagation(); handleStyleModeToggle(layer, 'individual'); }}>Individual styles</button>
+                        <button className="lp-dropdown-item" onClick={(e) => { e.stopPropagation(); handleStyleModeToggle(layer, 'uniform'); }}>Uniform style</button>
+                      </div>
+                    )}
+                  </div>
                   {children.map(child => {
-                    const isChildSelected = (child.type === 'polygon' && selectedPolygonEntry?.id === child.id) ||
-                                            (child.type === 'pin' && selectedId === child.id) ||
-                                            (child.type === 'floorplan' && selectedFloorPlanId === child.id);
+                    const isChildSelected = child.id === selectedLayerItemId;
                     return (
                       <div
                         key={child.id}
@@ -313,6 +362,25 @@ export default function LayersPanel({ tick = 0 }) {
                         <div className="lp-child-name" title={child.name || child.id}>
                           {child.name || (child.type === 'floorplan' ? 'Floor Plan' : child.id)}
                         </div>
+                        {layer.styleMode !== 'uniform' && child.type !== 'floorplan' && (
+                          <div className="lp-child-swatch-wrap" onClick={(e) => e.stopPropagation()} onWheel={(e) => e.stopPropagation()} onPointerDown={(e) => e.stopPropagation()}>
+                            <input
+                              type="color"
+                              className="lp-child-swatch"
+                              value={child.color || '#00d4ff'}
+                              onWheel={(e) => e.stopPropagation()}
+                              onPointerDown={(e) => e.stopPropagation()}
+                              onChange={(e) => {
+                                if (child.type === 'polygon' && polygonManagerRef.current) {
+                                  polygonManagerRef.current.setColor(child.id, e.target.value);
+                                }
+                                if (child.type === 'pin' && pinManagerRef.current) {
+                                  pinManagerRef.current.setColor(child.id, e.target.value);
+                                }
+                              }}
+                            />
+                          </div>
+                        )}
                       </div>
                     );
                   })}

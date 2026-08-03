@@ -2,6 +2,7 @@ import React, { useState } from 'react';
 import { useWorkspace } from '../../context/WorkspaceContext';
 import SaveProjectDialog from '../Dialogs/SaveProjectDialog';
 import OpenProjectDialog from '../Dialogs/OpenProjectDialog';
+import JSZip from 'jszip';
 import './ToolPanel.css';
 
 // ─── Inline SVG icons ─────────────────────────────────────────────────────────
@@ -125,6 +126,180 @@ function ToolBtn({ id, label, Icon, active, onClick, premium }) {
 
 // ─── ToolPanel ────────────────────────────────────────────────────────────────
 
+const blobUrlToBytes = async (url) => {
+  try {
+    const res = await fetch(url);
+    const blob = await res.blob();
+    return await blob.arrayBuffer();
+  } catch (e) {
+    console.warn("Failed to fetch blob", e);
+    return null;
+  }
+};
+
+const generateKMLString = (data, isKMZ = false) => {
+  let kml = `<?xml version="1.0" encoding="UTF-8"?>\n<kml xmlns="http://www.opengis.net/kml/2.2" xmlns:gx="http://www.google.com/kml/ext/2.2">\n  <Document>\n    <name>${data.id || 'Exported Project'}</name>\n`;
+
+  if (data.polygons) {
+    data.polygons.forEach((poly, i) => {
+      if (!poly.path || poly.path.length < 3) return;
+      const coords = [...poly.path, poly.path[0]].map(p => `${p.lng},${p.lat},2`).join(' ');
+      
+      let styleStr = '';
+      if (poly.color) {
+        const hex = poly.color.replace('#', '');
+        if (hex.length === 6) {
+          const r = hex.substring(0, 2);
+          const g = hex.substring(2, 4);
+          const b = hex.substring(4, 6);
+          // 100% opacity = ff, 12% opacity = 1e
+          const kmlLineColor = `ff${b}${g}${r}`;
+          const kmlFillColor = `1e${b}${g}${r}`;
+          styleStr = `
+      <Style>
+        <LineStyle>
+          <color>${kmlLineColor}</color>
+          <width>2</width>
+        </LineStyle>
+        <PolyStyle>
+          <color>${kmlFillColor}</color>
+        </PolyStyle>
+      </Style>`;
+        }
+      }
+
+      kml += `
+    <Placemark>
+      <name>${poly.name || `Polygon ${i+1}`}</name>${styleStr}
+      <Polygon>
+        <altitudeMode>relativeToGround</altitudeMode>
+        <extrude>0</extrude>
+        <outerBoundaryIs>
+          <LinearRing>
+            <coordinates>${coords}</coordinates>
+          </LinearRing>
+        </outerBoundaryIs>
+      </Polygon>
+    </Placemark>`;
+    });
+  }
+
+  if (data.pins) {
+    data.pins.forEach((pin, i) => {
+      if (!pin.position) return;
+      let styleStr = '';
+      if (pin.styleMode === 'custom' && pin.imageDataUrl) {
+         const href = isKMZ ? `files/pin-${pin.id}.png` : pin.imageDataUrl;
+         styleStr = `
+      <Style>
+        <IconStyle>
+          <Icon>
+            <href>${href}</href>
+          </Icon>
+        </IconStyle>
+      </Style>`;
+      }
+      kml += `
+    <Placemark>
+      <name>${pin.name || `Pin ${i+1}`}</name>${styleStr}
+      <Point>
+        <coordinates>${pin.position.lng},${pin.position.lat},0</coordinates>
+      </Point>
+    </Placemark>`;
+    });
+  }
+
+  if (data.roads) {
+    data.roads.forEach((road, i) => {
+      if (!road.points || road.points.length < 2) return;
+      const coords = road.points.map(p => `${p.lng},${p.lat},0`).join(' ');
+      kml += `
+    <Placemark>
+      <name>Road ${i+1}</name>
+      <LineString>
+        <coordinates>${coords}</coordinates>
+      </LineString>
+    </Placemark>`;
+    });
+  }
+
+  if (data.radii) {
+    data.radii.forEach((radius, i) => {
+      if (!radius.center || !radius.rings) return;
+      radius.rings.forEach((ring, j) => {
+        const distMeters = ring.distance;
+        const coords = [];
+        for (let angle = 0; angle <= 360; angle += 360/64) {
+           const rad = angle * Math.PI / 180;
+           const earthRadius = 6378137;
+           const dLat = (distMeters * Math.cos(rad)) / earthRadius;
+           const dLng = (distMeters * Math.sin(rad)) / (earthRadius * Math.cos(radius.center.lat * Math.PI / 180));
+           const lat = radius.center.lat + (dLat * 180 / Math.PI);
+           const lng = radius.center.lng + (dLng * 180 / Math.PI);
+           coords.push(`${lng},${lat},0`);
+        }
+        kml += `
+    <Placemark>
+      <name>Radius ${i+1} Ring ${j+1}</name>
+      <LineString>
+        <coordinates>${coords.join(' ')}</coordinates>
+      </LineString>
+    </Placemark>`;
+      });
+    });
+  }
+
+  if (data.floorPlans) {
+    data.floorPlans.forEach((fp, i) => {
+      if (!fp.bounds || !fp.corners) return;
+      const name = `Floor Plan ${i+1}`;
+      const href = isKMZ ? `files/floorplan-${fp.id}.png` : fp.floorplan;
+      
+      const isDistorted = !!fp.distortedCorners;
+      
+      if (isKMZ || isDistorted) {
+        // Use LatLonQuad for KMZ or if it's explicitly distorted
+        const targetCorners = fp.distortedCorners || fp.corners;
+        const { sw, se, ne, nw } = targetCorners;
+        kml += `
+    <GroundOverlay>
+      <name>${name}</name>
+      <Icon>
+        <href>${href}</href>
+      </Icon>
+      <gx:LatLonQuad>
+        <coordinates>
+          ${sw.lng},${sw.lat},0
+          ${se.lng},${se.lat},0
+          ${ne.lng},${ne.lat},0
+          ${nw.lng},${nw.lat},0
+        </coordinates>
+      </gx:LatLonQuad>
+    </GroundOverlay>`;
+      } else {
+        // Standard KML LatLonBox
+        kml += `
+    <GroundOverlay>
+      <name>${name}</name>
+      <Icon>
+        <href>${href}</href>
+      </Icon>
+      <LatLonBox>
+        <north>${fp.bounds.ne.lat}</north>
+        <south>${fp.bounds.sw.lat}</south>
+        <east>${fp.bounds.ne.lng}</east>
+        <west>${fp.bounds.sw.lng}</west>
+        <rotation>${fp.rotation || 0}</rotation>
+      </LatLonBox>
+    </GroundOverlay>`;
+      }
+    });
+  }
+
+  kml += `\n  </Document>\n</kml>`;
+  return kml;
+};
+
 export default function ToolPanel() {
   const {
     activeProjectTool, setActiveProjectTool,
@@ -150,35 +325,88 @@ export default function ToolPanel() {
   };
 
   const handleExportKML = () => {
-    // Stub KML export
-    handleExportJSON();
+    const data = getExportProject();
+    const kml = generateKMLString(data, false);
+    const blob = new Blob([kml], { type: "application/vnd.google-earth.kml+xml" });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = `project-${data.id || 'export'}.kml`;
+    a.click();
+    URL.revokeObjectURL(url);
     setExportMenuOpen(false);
   };
 
-  const handleExportKMZ = () => {
-    // Stub KMZ export
-    handleExportJSON();
+  const handleExportKMZ = async () => {
     setExportMenuOpen(false);
+    const data = getExportProject();
+    const zip = new JSZip();
+    const filesFolder = zip.folder("files");
+
+    if (data.floorPlans) {
+      for (const fp of data.floorPlans) {
+        if (fp.floorplan && fp.floorplan.startsWith('blob:')) {
+          const bytes = await blobUrlToBytes(fp.floorplan);
+          if (bytes) filesFolder.file(`floorplan-${fp.id}.png`, bytes);
+        } else if (fp.floorplan && fp.floorplan.startsWith('data:')) {
+          const base64Data = fp.floorplan.split(',')[1];
+          filesFolder.file(`floorplan-${fp.id}.png`, base64Data, { base64: true });
+        }
+      }
+    }
+
+    if (data.pins) {
+      for (const pin of data.pins) {
+        if (pin.styleMode === 'custom' && pin.imageDataUrl) {
+          if (pin.imageDataUrl.startsWith('data:')) {
+            const base64Data = pin.imageDataUrl.split(',')[1];
+            filesFolder.file(`pin-${pin.id}.png`, base64Data, { base64: true });
+          } else if (pin.imageDataUrl.startsWith('blob:')) {
+            const bytes = await blobUrlToBytes(pin.imageDataUrl);
+            if (bytes) filesFolder.file(`pin-${pin.id}.png`, bytes);
+          }
+        }
+      }
+    }
+
+    const kml = generateKMLString(data, true);
+    zip.file("doc.kml", kml);
+
+    try {
+      const blob = await zip.generateAsync({ type: "blob" });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      a.href = url;
+      a.download = `project-${data.id || 'export'}.kmz`;
+      a.click();
+      URL.revokeObjectURL(url);
+    } catch (e) {
+      console.error("KMZ generation failed", e);
+    }
   };
 
   const handleExportProjectTagJSON = () => {
     const data = getExportProject();
 
-    const primaryLocation = data.pins?.[0]?.position || data.polygons?.[0]?.points?.[0] || { lat: 0, lng: 0 };
-    const polygon = data.polygons?.[0]?.points || [{ lat: 0, lng: 0 }];
-    const unitPolygons = data.polygons?.length > 0 ? data.polygons.map(p => p.points) : [[{ lat: 0, lng: 0 }]];
+    let lat = 0, lng = 0;
+    if (data.polygons?.length > 0 && data.polygons[0].path?.length > 0) {
+      const path = data.polygons[0].path;
+      let sumLat = 0, sumLng = 0;
+      path.forEach(p => { sumLat += p.lat; sumLng += p.lng; });
+      lat = sumLat / path.length;
+      lng = sumLng / path.length;
+    } else if (data.pins?.length > 0) {
+      lat = data.pins[0].position.lat;
+      lng = data.pins[0].position.lng;
+    }
+
+    const polygon = data.polygons?.[0]?.path || [{ lat: 0, lng: 0 }];
+    const unitPolygons = data.polygons?.length > 0 ? data.polygons.map(p => p.path) : [[{ lat: 0, lng: 0 }]];
 
     const floorplanEntry = data.floorPlans?.[0] || {};
     const bounds = floorplanEntry.bounds || {
       sw: { lat: 0, lng: 0 },
       ne: { lat: 0, lng: 0 }
-    };
-    const floorplanCorners = floorplanEntry.corners || {
-      nw: { lat: 0, lng: 0 },
-      ne: { lat: 0, lng: 0 },
-      se: { lat: 0, lng: 0 },
-      sw: { lat: 0, lng: 0 },
-      rotationDeg: 0
     };
 
     const projectTag = {
@@ -204,14 +432,13 @@ export default function ToolPanel() {
         videos: [],
         floorplans: {},
         pinUrl: "External-Files/Assets/Pins",
-        lat: primaryLocation.lat,
-        lng: primaryLocation.lng,
-        polygon: polygon,
+        lat,
+        lng,
+        polygon,
         floorplan: "External-Files/Assets/Map-Floorplans",
-        bounds: bounds,
-        floorplanCorners: floorplanCorners,
+        bounds,
         unitPolygonsGPS: true,
-        unitPolygons: unitPolygons,
+        unitPolygons,
         units: [
           { id: 1, sqyd: 0, length: "", width: "", status: "AVAILABLE", orientation: "" }
         ]

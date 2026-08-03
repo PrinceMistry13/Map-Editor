@@ -55,12 +55,12 @@ export default function PreviewMap() {
   const mapsReady = useGoogleMapsReady();
   const mapRef = useRef(null);
   const [mapReady, setMapReady] = useState(false);
-  
+
   const [projectData, setProjectData] = useState(null);
   const polygonManagerRef = useRef(null);
   const pinManagerRef = useRef(null);
   const floorPlanManagerRef = useRef(null);
-  
+
   const featureOverlaysRef = useRef({ roads: [], radii: [] });
 
   const [selectedFeature, setSelectedFeature] = useState(null); // { type, name, pos }
@@ -88,6 +88,15 @@ export default function PreviewMap() {
   const onMapLoad = useCallback((map) => {
     mapRef.current = map;
     setMapReady(true);
+  }, []);
+
+  const onMapUnmount = useCallback(() => {
+    mapRef.current = null;
+    polygonManagerRef.current = null;
+    pinManagerRef.current = null;
+    floorPlanManagerRef.current = null;
+    featureOverlaysRef.current = { roads: [], radii: [] };
+    setMapReady(false);
   }, []);
 
   useEffect(() => {
@@ -155,22 +164,22 @@ export default function PreviewMap() {
     }
     if (!floorPlanManagerRef.current) {
       floorPlanManagerRef.current = new FloorPlanManager(map, {
-        onSelect: () => {}, // No popup needed for floor plans
+        onSelect: () => { }, // No popup needed for floor plans
       });
       projectData.floorPlans?.forEach(fp => {
         const fpId = `preview-fp-${fp.id}`;
         const center = { lat: (fp.bounds.sw.lat + fp.bounds.ne.lat) / 2, lng: (fp.bounds.sw.lng + fp.bounds.ne.lng) / 2 };
-        
+
         floorPlanManagerRef.current.addFloorPlan(
           fpId, fp.floorplan, center, fp.scale, fp.rotation, fp.opacity, fp.timestamp, fp.layerId
         ).then(() => {
           const entry = floorPlanManagerRef.current.overlays.get(fpId);
           if (entry && entry.overlay) {
-             entry.overlay.update({ isLocked: true });
-             // Apply initial visibility after load
-             if (!layerVisibility[entry.layerId || 'layer-1']) {
-               entry.overlay.setMap(null);
-             }
+            entry.overlay.update({ isLocked: true });
+            // Apply initial visibility after load
+            if (!layerVisibility[entry.layerId || 'layer-1']) {
+              entry.overlay.setMap(null);
+            }
           }
         });
 
@@ -208,31 +217,31 @@ export default function PreviewMap() {
 
       projectData.radii?.forEach((radius) => {
 
-      const color = radius.ringColor || "#00CED1";
-      featureOverlaysRef.current.radii.push(
-        new GM.Marker({
-          position: radius.center, map,
-          icon: {
-            path: GM.SymbolPath.CIRCLE, scale: 5,
-            fillColor: color, fillOpacity: 1,
-            strokeColor: "#fff", strokeWeight: 1.5,
-          },
-        })
-      );
-      extendBounds(radius.center);
-      radius.rings.forEach(({ distance }) => {
+        const color = radius.ringColor || "#00CED1";
         featureOverlaysRef.current.radii.push(
-          new GM.Circle({
-            center: radius.center, radius: distance, map,
-            strokeColor: color, strokeWeight: 2, strokeOpacity: 0.8,
-            fillOpacity: 0, clickable: false,
+          new GM.Marker({
+            position: radius.center, map,
+            icon: {
+              path: GM.SymbolPath.CIRCLE, scale: 5,
+              fillColor: color, fillOpacity: 1,
+              strokeColor: "#fff", strokeWeight: 1.5,
+            },
           })
         );
-        const distDeg = distance / 111320;
-        extendBounds({ lat: radius.center.lat + distDeg, lng: radius.center.lng + distDeg });
-        extendBounds({ lat: radius.center.lat - distDeg, lng: radius.center.lng - distDeg });
+        extendBounds(radius.center);
+        radius.rings.forEach(({ distance }) => {
+          featureOverlaysRef.current.radii.push(
+            new GM.Circle({
+              center: radius.center, radius: distance, map,
+              strokeColor: color, strokeWeight: 2, strokeOpacity: 0.8,
+              fillOpacity: 0, clickable: false,
+            })
+          );
+          const distDeg = distance / 111320;
+          extendBounds({ lat: radius.center.lat + distDeg, lng: radius.center.lng + distDeg });
+          extendBounds({ lat: radius.center.lat - distDeg, lng: radius.center.lng - distDeg });
+        });
       });
-    });
     }
 
     // 5. Sync visibility based on layers whenever layerVisibility changes
@@ -246,14 +255,14 @@ export default function PreviewMap() {
         entry.marker.setVisible(layerVisibility[entry.layerId || 'layer-1'] !== false);
       });
     }
-    
+
     if (floorPlanManagerRef.current) {
       floorPlanManagerRef.current.overlays.forEach(entry => {
         const isVisible = layerVisibility[entry.layerId || 'layer-1'] !== false;
         if (isVisible) {
-           if (!entry.overlay.getMap()) entry.overlay.setMap(mapRef.current);
+          if (!entry.overlay.getMap()) entry.overlay.setMap(mapRef.current);
         } else {
-           entry.overlay.setMap(null);
+          entry.overlay.setMap(null);
         }
       });
     }
@@ -286,7 +295,7 @@ export default function PreviewMap() {
 
   const selectChild = (child) => {
     if (!mapRef.current) return;
-    
+
     if (child.type === 'polygon' && polygonManagerRef.current) {
       const entry = polygonManagerRef.current.polygons.get(`preview-poly-${child.id}`);
       if (entry && entry.gPolygon) {
@@ -339,7 +348,7 @@ export default function PreviewMap() {
             const isVisible = layerVisibility[layer.id] !== false;
             const isExpanded = expandedLayers[layer.id];
             const children = getLayerChildren(layer.id);
-            
+
             return (
               <div key={layer.id} className="preview-lp-layer">
                 <div className="preview-lp-layer-row">
@@ -349,9 +358,9 @@ export default function PreviewMap() {
                     title={isVisible ? "Hide layer" : "Show layer"}
                   >
                     {isVisible ? (
-                      <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" strokeWidth="2.5"><path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/><circle cx="12" cy="12" r="3"/></svg>
+                      <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" strokeWidth="2.5"><path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z" /><circle cx="12" cy="12" r="3" /></svg>
                     ) : (
-                      <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" strokeWidth="2.5"><path d="M17.94 17.94A10.07 10.07 0 0 1 12 20c-7 0-11-8-11-8a18.45 18.45 0 0 1 5.06-5.94M9.9 4.24A9.12 9.12 0 0 1 12 4c7 0 11 8 11 8a18.5 18.5 0 0 1-2.16 3.19m-6.72-1.07a3 3 0 1 1-4.24-4.24"/><line x1="1" y1="1" x2="23" y2="23"/></svg>
+                      <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" strokeWidth="2.5"><path d="M17.94 17.94A10.07 10.07 0 0 1 12 20c-7 0-11-8-11-8a18.45 18.45 0 0 1 5.06-5.94M9.9 4.24A9.12 9.12 0 0 1 12 4c7 0 11 8 11 8a18.5 18.5 0 0 1-2.16 3.19m-6.72-1.07a3 3 0 1 1-4.24-4.24" /><line x1="1" y1="1" x2="23" y2="23" /></svg>
                     )}
                   </button>
                   <div className="preview-lp-color-swatch-wrap">
@@ -363,7 +372,7 @@ export default function PreviewMap() {
                     onClick={() => toggleExpand(layer.id)}
                     style={{ visibility: children.length > 0 ? 'visible' : 'hidden' }}
                   >
-                    <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" strokeWidth="2"><polyline points="9 18 15 12 9 6"/></svg>
+                    <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" strokeWidth="2"><polyline points="9 18 15 12 9 6" /></svg>
                   </button>
                 </div>
 
@@ -387,6 +396,7 @@ export default function PreviewMap() {
           center={DEFAULT_CENTER}
           zoom={DEFAULT_ZOOM}
           onLoad={onMapLoad}
+          onUnmount={onMapUnmount}
           options={buildMapOptions()}
         >
           {selectedFeature && (

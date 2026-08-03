@@ -10,7 +10,7 @@ export function nextId(prefix = 'f') {
 
 // ─── Initial project model ─────────────────────────────────────────────────────
 const INITIAL_PROJECT = {
-  layers: [{ id: 'layer-1', name: 'Untitled Layer', color: '#00CED1', visible: true, locked: false, order: 0 }],
+  layers: [{ id: 'layer-1', name: 'Untitled Layer', color: '#00CED1', visible: true, locked: false, order: 0, styleMode: 'individual' }],
   polygons: [], // { id, points:[{lat,lng}], fillColor, lineColor, lineWidth, layerId }
   pins: [], // { id, position:{lat,lng}, category, layerId }
   roads: [], // { id, points:[{lat,lng}], lineColor, lineWidth, roadWidth, roadName }
@@ -53,6 +53,7 @@ export function WorkspaceProvider({ children }) {
   const [selectedId, setSelectedId] = useState(null);
   const [selectedPolygonEntry, setSelectedPolygonEntry] = useState(null);
   const [selectedFloorPlanId, setSelectedFloorPlanId] = useState(null);
+  const [selectedLayerItemId, setSelectedLayerItemId] = useState(null);
   const [snapToGrid, setSnapToGrid] = useState(false);
   const [floorPlanMode, setFloorPlanMode] = useState('manual'); // 'manual' | 'gcp'
   const [gcpPoints, setGCPPoints] = useState([]); // { id, img: {x,y}, map: {lat,lng}, error }
@@ -88,8 +89,11 @@ export function WorkspaceProvider({ children }) {
   const closeSidePopups = useCallback(() => {
     polygonManagerRef.current?.deselect();
     pinManagerRef.current?.deselect();
+    floorPlanManagerRef.current?.onSelect(null);
     setSelectedPolygonEntry(null);
     setSelectedId(null);
+    setSelectedFloorPlanId(null);
+    setSelectedLayerItemId(null);
   }, []);
 
   // commitProject: updater fn or new project object — writes to history
@@ -105,7 +109,8 @@ export function WorkspaceProvider({ children }) {
       color: '#00CED1',
       visible: true,
       locked: false,
-      order: project.layers?.length || 0
+      order: project.layers?.length || 0,
+      styleMode: 'individual'
     };
     commitProject((proj) => ({ ...proj, layers: [...(proj.layers || []), newLayer] }));
     setActiveLayerId(newLayer.id);
@@ -189,6 +194,8 @@ export function WorkspaceProvider({ children }) {
         setSelectedPolygonEntry,
         selectedFloorPlanId,
         setSelectedFloorPlanId,
+        selectedLayerItemId,
+        setSelectedLayerItemId,
         floorPlanMode,
         setFloorPlanMode,
         gcpPoints,
