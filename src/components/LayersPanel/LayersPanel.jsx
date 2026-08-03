@@ -381,6 +381,17 @@ export default function LayersPanel({ tick = 0 }) {
                             />
                           </div>
                         )}
+                        <button
+                          className="lp-child-edit-btn"
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            handleLayerClick(layer.id);
+                            selectChild(child);
+                          }}
+                          title="Edit"
+                        >
+                          <PaintBrushIcon />
+                        </button>
                       </div>
                     );
                   })}

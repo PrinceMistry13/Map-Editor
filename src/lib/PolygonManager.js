@@ -63,9 +63,19 @@ export default class PolygonManager {
     // Clicking an already-placed (non-editable) polygon re-selects it and
     // brings back its properties popup, so the user can re-enter edit mode.
     gPolygon.addListener('click', (e) => {
+      if (this.callbacks.getActiveTool && this.callbacks.getActiveTool() !== null) {
+        window.google.maps.event.trigger(this.map, 'click', e);
+        return;
+      }
       e.domEvent && e.domEvent.stopPropagation();
       gPolygon.setOptions({ zIndex: ++this.zCounter });
       this.select(id, e.latLng ? e.latLng.toJSON() : null);
+    });
+
+    gPolygon.addListener('mousemove', (e) => {
+      if (this.callbacks.getActiveTool && this.callbacks.getActiveTool() !== null) {
+        window.google.maps.event.trigger(this.map, 'mousemove', e);
+      }
     });
     return entry;
   }

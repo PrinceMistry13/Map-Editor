@@ -395,6 +395,7 @@ function MapWorkspaceInner() {
           setTick(t => t + 1);
         },
         pushHistory: pushThunk,
+        getActiveTool: () => activeToolRef.current,
       });
     } else if (polygonManagerRef.current.map !== mapRef.current) {
       polygonManagerRef.current.map = mapRef.current;
@@ -439,6 +440,7 @@ function MapWorkspaceInner() {
         },
         onChange: () => { setTick(t => t + 1); },
         pushHistory: pushThunk,
+        getActiveTool: () => activeToolRef.current,
       });
     } else if (pinManagerRef.current.map !== mapRef.current) {
       pinManagerRef.current.map = mapRef.current;
@@ -477,6 +479,7 @@ function MapWorkspaceInner() {
         },
         onChange: () => { setTick(t => t + 1); },
         pushHistory: pushThunk,
+        getActiveTool: () => activeToolRef.current,
         // Auto-plot the boundary polygon from the floorplan's own traced
         // outline the moment it's locked — one polygon per floorplan,
         // re-used (path updated in place) if it's unlocked/relocked again.
@@ -651,6 +654,10 @@ function MapWorkspaceInner() {
     mapListenersRef.current = [];
     cancelDrawing();
     clearPreview();
+
+    // Disable FloorPlan DOM pointer events while drawing so clicks pass down to map
+    const isDrawing = activeTool !== null;
+    if (floorPlanManagerRef.current) floorPlanManagerRef.current.setAllPointerEvents(!isDrawing);
 
     if (!activeTool || baseTool === "grid") {
       if (floorPlanMode !== 'gcp') {

@@ -281,6 +281,13 @@ export default class FloorPlanManager {
     this.callbacks.onChange && this.callbacks.onChange(id);
   }
 
+  setAllPointerEvents(isClickable) {
+    this.isClickable = isClickable;
+    this.overlays.forEach(entry => {
+      if (entry.overlay) entry.overlay.update({ isClickable });
+    });
+  }
+
   commitChange(id, startState, endState) {
     const entry = this.overlays.get(id);
     if (!entry) return;

@@ -41,13 +41,20 @@ export default class PinManager {
     // ---------------------------------------------------------------- lifecycle
     createPin(id, name, color, position, styleMode = 'default', imageDataUrl = null, layerId = 'layer-1') {
         const marker = new window.google.maps.Marker({
-            position, map: this.map, draggable: false, zIndex: 100,
+            position, 
+            map: this.map, 
+            draggable: false, 
+            zIndex: 100,
             icon: pinSvgIcon(color, styleMode === 'custom' ? imageDataUrl : null),
         });
         const entry = { id, name, color, position, styleMode, imageDataUrl, layerId, marker };
         this.pins.set(id, entry);
 
         marker.addListener('click', (e) => {
+            if (this.callbacks.getActiveTool && this.callbacks.getActiveTool() !== null) {
+                window.google.maps.event.trigger(this.map, 'click', e);
+                return;
+            }
             e.domEvent && e.domEvent.stopPropagation();
             this.exitEditMode();
             this.select(id, marker.getPosition().toJSON());

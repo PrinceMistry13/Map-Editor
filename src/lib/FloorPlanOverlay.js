@@ -20,6 +20,7 @@ export function createFloorPlanOverlayClass() {
       this.manager = opts.manager;
       
       this.div = null;
+      this.eventDiv = null;
       this.img = null;
       
       this.onInteractStart = this.onInteractStart.bind(this);
@@ -34,21 +35,32 @@ export function createFloorPlanOverlayClass() {
     }
 
     onAdd() {
+      // Visual Div (Layered correctly with polygons)
       this.div = document.createElement('div');
-      this.div.className = 'fp-overlay-container';
+      this.div.className = 'fp-overlay-visual';
       this.div.style.position = 'absolute';
-      this.div.style.cursor = this.isLocked ? 'default' : 'move';
+      this.div.style.zIndex = '1';
+      this.div.style.pointerEvents = 'none'; // Visual only
       this.div.style.transformOrigin = 'center center';
       
       this.img = document.createElement('img');
       this.img.src = this.url;
       this.img.style.width = '100%';
       this.img.style.height = '100%';
-      this.img.style.pointerEvents = 'none'; // let the div catch events
+      this.img.style.pointerEvents = 'none';
       this.div.appendChild(this.img);
+
+      // Event Div (Catches mouse events in the top pane)
+      this.eventDiv = document.createElement('div');
+      this.eventDiv.className = 'fp-overlay-container';
+      this.eventDiv.style.position = 'absolute';
+      this.eventDiv.style.zIndex = '100';
+      this.eventDiv.style.cursor = this.isLocked ? 'default' : 'move';
+      this.eventDiv.style.transformOrigin = 'center center';
+      this.eventDiv.style.pointerEvents = this.isLocked ? 'none' : 'auto';
       
       if (this.isLocked) {
-        this.div.classList.add('fp-locked');
+        this.eventDiv.classList.add('fp-locked');
       }
 
       // Handles
@@ -60,7 +72,7 @@ export function createFloorPlanOverlayClass() {
         h.dataset.cls = cls;
         h.style.cursor = cursor;
         h.style.position = 'absolute';
-        this.div.appendChild(h);
+        this.eventDiv.appendChild(h);
       };
       createHandle('resize', 'nwse-resize', 'nw');
       createHandle('resize', 'nesw-resize', 'ne');
@@ -73,11 +85,12 @@ export function createFloorPlanOverlayClass() {
       createHandle('rotate', 'crosshair', 'rotate');
       createHandle('drag', 'move', 'center');
 
-      this.div.addEventListener('mousedown', this.onInteractStart);
-      this.div.addEventListener('touchstart', this.onInteractStart, { passive: false });
+      this.eventDiv.addEventListener('mousedown', this.onInteractStart);
+      this.eventDiv.addEventListener('touchstart', this.onInteractStart, { passive: false });
       
       const panes = this.getPanes();
-      panes.overlayMouseTarget.appendChild(this.div);
+      panes.overlayLayer.appendChild(this.div);
+      panes.overlayMouseTarget.appendChild(this.eventDiv);
     }
 
     draw() {
@@ -92,6 +105,12 @@ export function createFloorPlanOverlayClass() {
         this.div.style.height = '0px';
         this.div.style.transform = 'none';
         this.div.style.opacity = this.opacity;
+
+        this.eventDiv.style.left = '0px';
+        this.eventDiv.style.top = '0px';
+        this.eventDiv.style.width = '0px';
+        this.eventDiv.style.height = '0px';
+        this.eventDiv.style.transform = 'none';
 
         const w = 1000, h = 1000;
         const src = [
@@ -114,7 +133,7 @@ export function createFloorPlanOverlayClass() {
           {x: pSW.x, y: pSW.y}
         ];
 
-        const handles = this.div.querySelectorAll('.fp-handle');
+        const handles = this.eventDiv.querySelectorAll('.fp-handle');
         handles.forEach(handle => {
           const cls = handle.dataset.cls;
           if (this.mode === 'distort' && ['nw', 'ne', 'se', 'sw'].includes(cls)) {
@@ -161,6 +180,12 @@ export function createFloorPlanOverlayClass() {
         this.div.style.transform = `rotate(${this.rotationDeg}deg)`;
         this.div.style.opacity = this.opacity;
 
+        this.eventDiv.style.left = (centerPx.x - widthPx / 2) + 'px';
+        this.eventDiv.style.top = (centerPx.y - heightPx / 2) + 'px';
+        this.eventDiv.style.width = widthPx + 'px';
+        this.eventDiv.style.height = heightPx + 'px';
+        this.eventDiv.style.transform = `rotate(${this.rotationDeg}deg)`;
+
         this.img.style.position = '';
         this.img.style.left = '';
         this.img.style.top = '';
@@ -169,7 +194,7 @@ export function createFloorPlanOverlayClass() {
         this.img.style.transformOrigin = '';
         this.img.style.transform = '';
 
-        const handles = this.div.querySelectorAll('.fp-handle');
+        const handles = this.eventDiv.querySelectorAll('.fp-handle');
         handles.forEach(handle => {
           handle.style.display = '';
           handle.style.left = '';
@@ -182,10 +207,14 @@ export function createFloorPlanOverlayClass() {
 
     onRemove() {
       if (this.div) {
-        this.div.removeEventListener('mousedown', this.onInteractStart);
-        this.div.removeEventListener('touchstart', this.onInteractStart);
         if (this.div.parentNode) this.div.parentNode.removeChild(this.div);
         this.div = null;
+      }
+      if (this.eventDiv) {
+        this.eventDiv.removeEventListener('mousedown', this.onInteractStart);
+        this.eventDiv.removeEventListener('touchstart', this.onInteractStart);
+        if (this.eventDiv.parentNode) this.eventDiv.parentNode.removeChild(this.eventDiv);
+        this.eventDiv = null;
       }
     }
 
@@ -200,13 +229,21 @@ export function createFloorPlanOverlayClass() {
       }
       if (opts.isLocked !== undefined) {
         this.isLocked = opts.isLocked;
-        if (this.div) {
-          this.div.style.cursor = this.isLocked ? 'default' : 'move';
-          if (this.isLocked) {
-            this.div.classList.add('fp-locked');
-          } else {
-            this.div.classList.remove('fp-locked');
-          }
+      }
+      if (opts.isClickable !== undefined) {
+        this.isClickable = opts.isClickable;
+      }
+      if (this.eventDiv) {
+        this.eventDiv.style.cursor = this.isLocked ? 'default' : 'move';
+        
+        // Disable pointer events if it's explicitly locked, OR if clickability is globally disabled (tool active)
+        const effectivelyLocked = this.isLocked || (this.isClickable === false);
+        this.eventDiv.style.pointerEvents = effectivelyLocked ? 'none' : 'auto';
+        
+        if (this.isLocked) {
+          this.eventDiv.classList.add('fp-locked');
+        } else {
+          this.eventDiv.classList.remove('fp-locked');
         }
       }
       if (opts.isAspectLocked !== undefined) {
@@ -227,6 +264,7 @@ export function createFloorPlanOverlayClass() {
     }
 
     onInteractStart(e) {
+      if (this.manager.callbacks.getActiveTool && this.manager.callbacks.getActiveTool() !== null) return;
       if (this.isLocked) {
         this.manager.onSelect(this.id);
         return;
@@ -435,7 +473,7 @@ export function createFloorPlanOverlayClass() {
         this.heightMeters = newHeightPx * this.interactState.metersPerPx;
       } else if (this.interactState.type === 'rotate') {
         // Compute angle relative to center
-        const rect = this.div.getBoundingClientRect();
+        const rect = this.eventDiv.getBoundingClientRect();
         const centerX = rect.left + rect.width / 2;
         const centerY = rect.top + rect.height / 2;
         const angle = Math.atan2(clientY - centerY, clientX - centerX);
