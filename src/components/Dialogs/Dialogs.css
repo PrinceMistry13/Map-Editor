@@ -1,0 +1,152 @@
+.dialog-overlay {
+  position: fixed;
+  top: 0;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  background: rgba(0, 0, 0, 0.5);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 9999;
+}
+
+.dialog-card {
+  background: #1e1e1e;
+  border: 1px solid #333;
+  border-radius: 8px;
+  width: 400px;
+  max-width: 90vw;
+  box-shadow: 0 8px 32px rgba(0, 0, 0, 0.4);
+  color: #eee;
+  display: flex;
+  flex-direction: column;
+}
+
+.dialog-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 16px;
+  border-bottom: 1px solid #333;
+}
+
+.dialog-header h3 {
+  margin: 0;
+  font-size: 16px;
+  font-weight: 600;
+}
+
+.dialog-close {
+  background: none;
+  border: none;
+  color: #888;
+  font-size: 20px;
+  cursor: pointer;
+  padding: 0 4px;
+}
+
+.dialog-close:hover {
+  color: #fff;
+}
+
+.dialog-body {
+  padding: 16px;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.dialog-options {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.dialog-btn {
+  background: #333;
+  border: 1px solid #444;
+  color: #eee;
+  padding: 12px;
+  border-radius: 6px;
+  cursor: pointer;
+  font-size: 14px;
+  text-align: left;
+  transition: background 0.15s;
+}
+
+.dialog-btn:hover {
+  background: #444;
+}
+
+.dialog-btn-secondary {
+  background: transparent;
+  border: 1px solid #444;
+  color: #888;
+  padding: 8px;
+  border-radius: 6px;
+  cursor: pointer;
+  font-size: 13px;
+  margin-top: 8px;
+}
+
+.dialog-btn-secondary:hover {
+  color: #eee;
+  border-color: #666;
+}
+
+.dialog-list {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.dialog-list h4 {
+  margin: 0 0 4px 0;
+  font-size: 13px;
+  color: #aaa;
+  font-weight: 500;
+}
+
+.dialog-list-item {
+  background: #2a2a2a;
+  border: 1px solid #3a3a3a;
+  color: #eee;
+  padding: 10px 12px;
+  border-radius: 4px;
+  cursor: pointer;
+  font-size: 14px;
+  text-align: left;
+  display: flex;
+  justify-content: space-between;
+}
+
+.dialog-list-item:hover {
+  background: #353535;
+  border-color: #4a4a4a;
+}
+
+.dialog-portfolio-group {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.dialog-portfolio-header {
+  font-weight: 600;
+  background: #222;
+}
+
+.dialog-portfolio-projects {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding-left: 16px;
+  margin-top: 4px;
+}
+
+.dialog-list-subitem {
+  background: #262626;
+  font-size: 13px;
+  padding: 8px 12px;
+}

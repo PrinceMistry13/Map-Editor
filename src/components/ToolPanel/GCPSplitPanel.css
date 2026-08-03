@@ -1,0 +1,191 @@
+.gcp-panel {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  width: 100%;
+  background: #0d0d12;
+  border-right: 1px solid rgba(255, 255, 255, 0.1);
+  color: #fff;
+  overflow: hidden;
+}
+
+.gcp-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 12px 16px;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.08);
+  background: rgba(255, 255, 255, 0.02);
+}
+
+.gcp-header h3 {
+  margin: 0;
+  font-size: 14px;
+  font-weight: 600;
+  color: #e2e8f0;
+}
+
+.gcp-close {
+  background: none;
+  border: none;
+  color: #94a3b8;
+  font-size: 20px;
+  cursor: pointer;
+  padding: 0 4px;
+}
+
+.gcp-close:hover {
+  color: #fff;
+}
+
+.gcp-instructions {
+  padding: 12px 16px;
+  background: rgba(139, 92, 246, 0.05);
+  border-bottom: 1px solid rgba(139, 92, 246, 0.2);
+}
+
+.gcp-hint {
+  font-size: 13px;
+  color: #cbd5e1;
+}
+
+.gcp-hint.highlight {
+  color: #a78bfa;
+  font-weight: 600;
+}
+
+.gcp-image-container {
+  flex: 1;
+  position: relative;
+  overflow: auto;
+  background: #000;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 20px;
+}
+
+.gcp-img {
+  max-width: 100%;
+  max-height: 100%;
+  cursor: crosshair;
+  transition: opacity 0.2s;
+}
+
+.gcp-img.waiting {
+  opacity: 0.6;
+  cursor: not-allowed;
+}
+
+.gcp-marker {
+  position: absolute;
+  width: 20px;
+  height: 20px;
+  margin-top: -10px;
+  margin-left: -10px;
+  background: #f43f5e;
+  color: #fff;
+  border-radius: 50%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 11px;
+  font-weight: bold;
+  pointer-events: none;
+  border: 1.5px solid #fff;
+  box-shadow: 0 2px 4px rgba(0, 0, 0, 0.5);
+  z-index: 10;
+}
+
+.gcp-marker.pending {
+  background: #f59e0b;
+}
+
+.gcp-table-container {
+  height: 200px;
+  overflow-y: auto;
+  border-top: 1px solid rgba(255, 255, 255, 0.08);
+  background: #111118;
+}
+
+.gcp-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 12px;
+}
+
+.gcp-table th {
+  text-align: left;
+  padding: 8px 12px;
+  color: #94a3b8;
+  font-weight: 500;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.08);
+  background: rgba(255, 255, 255, 0.02);
+  position: sticky;
+  top: 0;
+}
+
+.gcp-table td {
+  padding: 8px 12px;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.04);
+  color: #e2e8f0;
+}
+
+.gcp-empty-row {
+  text-align: center !important;
+  color: #64748b !important;
+  font-style: italic;
+  padding: 24px !important;
+}
+
+.gcp-del-btn {
+  background: none;
+  border: none;
+  color: #f43f5e;
+  cursor: pointer;
+  font-size: 16px;
+  line-height: 1;
+}
+
+.gcp-del-btn:hover {
+  color: #fb7185;
+}
+
+.gcp-actions {
+  padding: 12px 16px;
+  background: rgba(255, 255, 255, 0.02);
+  border-top: 1px solid rgba(255, 255, 255, 0.08);
+  display: flex;
+  justify-content: stretch;
+}
+
+.gcp-compute-btn {
+  flex: 1;
+  background: #8b5cf6;
+  color: #fff;
+  border: none;
+  padding: 10px;
+  border-radius: 6px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: background 0.2s;
+}
+
+.gcp-compute-btn:hover:not(:disabled) {
+  background: #7c3aed;
+}
+
+.gcp-compute-btn:disabled {
+  background: #475569;
+  color: #94a3b8;
+  cursor: not-allowed;
+}
+
+.gcp-empty {
+  display: flex;
+  height: 100%;
+  align-items: center;
+  justify-content: center;
+  color: #94a3b8;
+  font-size: 14px;
+}

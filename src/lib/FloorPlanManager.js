@@ -1,0 +1,388 @@
+import { createFloorPlanOverlayClass } from './FloorPlanOverlay';
+import { extractForegroundMask, traceContour, simplifyPolygon } from '../utils/imageBoundary';
+
+export default class FloorPlanManager {
+  constructor(map, callbacks = {}) {
+    this.map = map;
+    this.callbacks = callbacks;
+    this.overlays = new Map();
+    this.selectedId = null;
+    this.FloorPlanOverlay = createFloorPlanOverlayClass();
+  }
+
+  // Preloads the image to get natural dimensions
+  async addFloorPlan(id, url, center, scale = 1, rotationDeg = 0, opacity = 1, timestamp = null, layerId = 'layer-1') {
+    return new Promise((resolve, reject) => {
+      const img = new Image();
+      img.crossOrigin = 'anonymous';
+      img.onload = () => {
+        let effectiveScale = scale;
+        // If scale is exactly 1 (default for new uploads) and the image is very large, cap width to 60m
+        if (scale === 1 && img.naturalWidth > 60) {
+          effectiveScale = 60 / img.naturalWidth;
+        }
+        const widthMeters = img.naturalWidth * effectiveScale;
+        const heightMeters = img.naturalHeight * effectiveScale;
+        // Update the scale in the entry so it saves correctly
+        scale = effectiveScale;
+
+        const overlay = new this.FloorPlanOverlay({
+          id, url, center, widthMeters, heightMeters, rotationDeg, opacity,
+          map: this.map,
+          manager: this
+        });
+
+        this.overlays.set(id, {
+          id, url, scale, originalWidth: img.naturalWidth, originalHeight: img.naturalHeight, overlay, timestamp, layerId, imgEl: img
+        });
+
+        this.callbacks.onChange && this.callbacks.onChange();
+        resolve(id);
+      };
+      img.onerror = reject;
+      img.src = url;
+    });
+  }
+
+  loadFloorPlan(id, data) {
+    const center = {
+      lat: (data.bounds.sw.lat + data.bounds.ne.lat) / 2,
+      lng: (data.bounds.sw.lng + data.bounds.ne.lng) / 2
+    };
+    this.addFloorPlan(id, data.floorplan, center, data.scale, data.rotation, data.opacity, data.timestamp, data.layerId || 'layer-1');
+  }
+
+  // Generate the axis-aligned bounding box from the rotated corners
+  // (Helper for saving format)
+  computeBounds(overlay) {
+    const { center, widthMeters, heightMeters, rotationDeg } = overlay;
+
+    // Project center to mercator
+    const R = 6378137;
+    const cx = (center.lng * Math.PI * R) / 180;
+    const cy = R * Math.log(Math.tan(Math.PI / 4 + (center.lat * Math.PI) / 360));
+
+    // 4 corners relative to center in meters
+    const hw = widthMeters / 2;
+    const hh = heightMeters / 2;
+    const corners = [
+      { x: -hw, y: -hh },
+      { x: hw, y: -hh },
+      { x: hw, y: hh },
+      { x: -hw, y: hh }
+    ];
+
+    const rad = (rotationDeg * Math.PI) / 180;
+    const cos = Math.cos(rad);
+    const sin = Math.sin(rad);
+
+    let minLat = Infinity, maxLat = -Infinity;
+    let minLng = Infinity, maxLng = -Infinity;
+
+    corners.forEach(c => {
+      const rx = cx + c.x * cos + c.y * sin;   // (or dx/dy in pointToLatLng)
+      const ry = cy - c.x * sin + c.y * cos;
+
+      const lng = (rx * 180) / (Math.PI * R);
+      const lat = (180 / Math.PI) * (2 * Math.atan(Math.exp(ry / R)) - Math.PI / 2);
+
+      if (lat < minLat) minLat = lat;
+      if (lat > maxLat) maxLat = lat;
+      if (lng < minLng) minLng = lng;
+      if (lng > maxLng) maxLng = lng;
+    });
+
+    return {
+      sw: { lat: minLat, lng: minLng },
+      ne: { lat: maxLat, lng: maxLng }
+    };
+  }
+
+  computeCorners(overlay) {
+    const { center, widthMeters, heightMeters, rotationDeg } = overlay;
+
+    // Project center to mercator
+    const R = 6378137;
+    const cx = (center.lng * Math.PI * R) / 180;
+    const cy = R * Math.log(Math.tan(Math.PI / 4 + (center.lat * Math.PI) / 360));
+
+    const hw = widthMeters / 2;
+    const hh = heightMeters / 2;
+
+    const cornerDefs = {
+      sw: { x: -hw, y: -hh },
+      se: { x: hw, y: -hh },
+      ne: { x: hw, y: hh },
+      nw: { x: -hw, y: hh }
+    };
+
+    const rad = (rotationDeg * Math.PI) / 180;
+    const cos = Math.cos(rad);
+    const sin = Math.sin(rad);
+
+    const result = { rotationDeg };
+
+    for (const [key, c] of Object.entries(cornerDefs)) {
+      const rx = cx + c.x * cos + c.y * sin;   // (or dx/dy in pointToLatLng)
+      const ry = cy - c.x * sin + c.y * cos;
+
+      const lng = (rx * 180) / (Math.PI * R);
+      const lat = (180 / Math.PI) * (2 * Math.atan(Math.exp(ry / R)) - Math.PI / 2);
+
+      result[key] = { lat, lng };
+    }
+
+    return result;
+  }
+
+  // Projects a single (dx, dy) meter-offset from the overlay's center —
+  // already rotated into overlay space — into lat/lng. Same math
+  // computeCorners uses for its 4 fixed corners, generalized to any point.
+  pointToLatLng(overlay, dx, dy) {
+    const { center, rotationDeg } = overlay;
+    const R = 6378137;
+    const cx = (center.lng * Math.PI * R) / 180;
+    const cy = R * Math.log(Math.tan(Math.PI / 4 + (center.lat * Math.PI) / 360));
+
+    const rad = (rotationDeg * Math.PI) / 180;
+    const cos = Math.cos(rad);
+    const sin = Math.sin(rad);
+
+    const rx = cx + dx * cos + dy * sin;
+    const ry = cy - dx * sin + dy * cos;
+
+    const lng = (rx * 180) / (Math.PI * R);
+    const lat = (180 / Math.PI) * (2 * Math.atan(Math.exp(ry / R)) - Math.PI / 2);
+    return { lat, lng };
+  }
+
+  // Traces the *actual* shape drawn in the floorplan raster (its
+  // transparent/background-colored margin excluded) and returns it as an
+  // array of {lat, lng} — the real outline, not the bounding rectangle.
+  // Returns null if tracing isn't possible, so callers can fall back to
+  // computeCorners().
+  async computeImageBoundary(id, opts = {}) {
+    const entry = this.overlays.get(id);
+    if (!entry) return null;
+    const { overlay, url, originalWidth: W, originalHeight: H } = entry;
+
+    try {
+      // Fetch as a blob and draw via createImageBitmap instead of reusing
+      // the shared <img> element. A blob-sourced draw can never taint the
+      // canvas, regardless of the image host's CORS headers or whether
+      // `crossOrigin` was honored — this is what was silently throwing
+      // SecurityError on getImageData and forcing the rectangle fallback.
+      const res = await fetch(url);
+      if (!res.ok) throw new Error(`fetch failed: ${res.status}`);
+      const blob = await res.blob();
+      const bitmap = await createImageBitmap(blob);
+
+      const canvas = document.createElement('canvas');
+      canvas.width = W;
+      canvas.height = H;
+      const ctx = canvas.getContext('2d', { willReadFrequently: true });
+      ctx.drawImage(bitmap, 0, 0, W, H);
+      const imageData = ctx.getImageData(0, 0, W, H);
+
+      const mask = extractForegroundMask(imageData, W, H);
+      let contourPx = traceContour(mask, W, H);
+      if (!contourPx || contourPx.length < 3) return null;
+
+      const epsilon = Math.max(W, H) * (opts.simplifyTolerance ?? 0.0015);
+      contourPx = simplifyPolygon(contourPx, epsilon);
+
+      const scaleX = overlay.widthMeters / W;
+      const scaleY = overlay.heightMeters / H;
+
+      return contourPx.map((p) => {
+        // Pixel (0,0) is the image's top-left → north-west corner, so flip Y.
+        const dx = (p.x - W / 2) * scaleX;
+        const dy = (H / 2 - p.y) * scaleY;
+        return this.pointToLatLng(overlay, dx, dy);
+      });
+    } catch (err) {
+      console.warn('Floorplan boundary trace failed, falling back to rectangle:', err);
+      return null;
+    }
+  }
+
+  // Returns array of objects formatted exactly as requested
+  getState() {
+    return Array.from(this.overlays.values()).map(entry => {
+      const bounds = this.computeBounds(entry.overlay);
+      const cornersObj = this.computeCorners(entry.overlay);
+      const scale = entry.overlay.widthMeters / entry.originalWidth; // update scale from current width
+      return {
+        id: entry.id, // we might need id for internal mapping, but prompt just says structure
+        floorplan: entry.url,
+        bounds,
+        corners: cornersObj,
+        rotation: entry.overlay.rotationDeg,
+        scale,
+        opacity: entry.overlay.opacity,
+        layerId: entry.layerId || 'layer-1',
+        timestamp: entry.timestamp || new Date().toISOString()
+      };
+    });
+  }
+
+  updateOpacity(id, opacity) {
+    const entry = this.overlays.get(id);
+    if (!entry) return;
+    const oldOp = entry.overlay.opacity;
+    entry.overlay.update({ opacity });
+    this.callbacks.pushHistory && this.callbacks.pushHistory({
+      undo: () => { entry.overlay.update({ opacity: oldOp }); },
+      redo: () => { entry.overlay.update({ opacity }); }
+    });
+    this.callbacks.onChange && this.callbacks.onChange();
+  }
+
+  onSelect(id) {
+    this.selectedId = id;
+    this.callbacks.onSelect && this.callbacks.onSelect(id);
+  }
+
+  onChange(id) {
+    this.callbacks.onChange && this.callbacks.onChange(id);
+  }
+
+  commitChange(id, startState, endState) {
+    const entry = this.overlays.get(id);
+    if (!entry) return;
+
+    const { overlay } = entry;
+    // Push undo/redo
+    this.callbacks.pushHistory && this.callbacks.pushHistory({
+      undo: () => {
+        overlay.update({
+          center: startState.origCenter,
+          widthMeters: startState.origWidth,
+          heightMeters: startState.origHeight,
+          rotationDeg: startState.origRot
+        });
+        this.callbacks.onChange && this.callbacks.onChange(id);
+      },
+      redo: () => {
+        overlay.update(endState);
+        this.callbacks.onChange && this.callbacks.onChange(id);
+      }
+    });
+    this.callbacks.onChange && this.callbacks.onChange(id);
+  }
+
+  delete(id) {
+    const entry = this.overlays.get(id);
+    if (!entry) return;
+
+    if (this.callbacks.pushHistory) {
+      this.callbacks.pushHistory({
+        undo: () => {
+          entry.overlay.setMap(this.map);
+          this.overlays.set(id, entry);
+          this.callbacks.onChange && this.callbacks.onChange();
+        },
+        redo: () => {
+          entry.overlay.setMap(null);
+          this.overlays.delete(id);
+          if (this.selectedId === id) this.selectedId = null;
+          this.callbacks.onChange && this.callbacks.onChange();
+        }
+      });
+    }
+
+    entry.overlay.setMap(null);
+    this.overlays.delete(id);
+    if (this.selectedId === id) this.selectedId = null;
+    this.callbacks.onChange && this.callbacks.onChange();
+  }
+
+  applyGCPTransform(id, transformResult) {
+    const entry = this.overlays.get(id);
+    if (!entry) return;
+
+    const startState = {
+      origCenter: { ...entry.overlay.center },
+      origWidth: entry.overlay.widthMeters,
+      origHeight: entry.overlay.heightMeters,
+      origRot: entry.overlay.rotationDeg
+    };
+
+    const endState = {
+      center: transformResult.centerLatLng,
+      widthMeters: transformResult.widthMeters,
+      heightMeters: transformResult.heightMeters,
+      rotationDeg: transformResult.rotationDeg
+    };
+
+    entry.overlay.update(endState);
+    this.commitChange(id, startState, endState);
+  }
+
+  reset(id) {
+    const entry = this.overlays.get(id);
+    if (!entry) return;
+    const startState = {
+      origCenter: { ...entry.overlay.center },
+      origWidth: entry.overlay.widthMeters,
+      origHeight: entry.overlay.heightMeters,
+      origRot: entry.overlay.rotationDeg
+    };
+    const endState = {
+      rotationDeg: 0,
+      widthMeters: entry.originalWidth, // scale = 1
+      heightMeters: entry.originalHeight
+    };
+    entry.overlay.update(endState);
+    this.commitChange(id, startState, endState);
+  }
+
+  async toggleLock(id) {
+    const entry = this.overlays.get(id);
+    if (!entry) return;
+    const isLocked = !entry.overlay.isLocked;
+    entry.overlay.update({ isLocked });
+    // On lock (not unlock), hand the exact rotated-rectangle corners to
+    // whoever wants to auto-plot the boundary polygon.
+    if (isLocked) {
+      const traced = await this.computeImageBoundary(id);
+      let path = traced;
+      if (!path) {
+        const c = this.computeCorners(entry.overlay);
+        path = [c.nw, c.ne, c.se, c.sw];
+      }
+      this.callbacks.onLock && this.callbacks.onLock(id, path, entry);
+    }
+    this.callbacks.onChange && this.callbacks.onChange();
+  }
+
+  toggleAspectLock(id) {
+    const entry = this.overlays.get(id);
+    if (!entry) return;
+    const isAspectLocked = !entry.overlay.isAspectLocked;
+    entry.overlay.update({ isAspectLocked });
+    this.callbacks.onChange && this.callbacks.onChange();
+  }
+
+  downloadSave(id) {
+    const entry = this.overlays.get(id);
+    if (!entry) return;
+    const bounds = this.computeBounds(entry.overlay);
+    const scale = entry.overlay.widthMeters / entry.originalWidth;
+    const data = {
+      floorplan: entry.url,
+      bounds,
+      rotation: entry.overlay.rotationDeg,
+      scale,
+      opacity: entry.overlay.opacity,
+      timestamp: entry.timestamp || new Date().toISOString()
+    };
+    const blob = new Blob([JSON.stringify(data, null, 2)], { type: "application/json" });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = `floorplan-${id}.json`;
+    a.click();
+    URL.revokeObjectURL(url);
+  }
+}

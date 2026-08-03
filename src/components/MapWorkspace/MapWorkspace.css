@@ -1,0 +1,531 @@
+/* ─── MapWorkspace ─────────────────────────────────────────────────────────── */
+
+/* Root shell */
+.mw-root {
+  position: fixed;
+  inset: 0;
+  background: #06060a;
+  font-family: 'Inter', system-ui, -apple-system, sans-serif;
+  display: flex;
+}
+
+.mw-map-container {
+  flex: 1;
+  height: 100vh;
+  position: relative;
+}
+
+.mw-gcp-active .gcp-panel {
+  width: 40%;
+  min-width: 400px;
+}
+
+/* ─── Loading screen ─────────────────────────────────────────────────────────*/
+.mw-loading {
+  position: fixed;
+  inset: 0;
+  background: #06060a;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 18px;
+}
+
+.mw-loading-ring {
+  width: 36px;
+  height: 36px;
+  border-radius: 50%;
+  border: 2.5px solid rgba(255, 255, 255, 0.08);
+  border-top-color: rgba(139, 92, 246, 0.8);
+  animation: mw-spin 0.9s linear infinite;
+}
+
+@keyframes mw-spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+.mw-loading-label {
+  color: rgba(255, 255, 255, 0.35);
+  font-size: 12px;
+  letter-spacing: 0.07em;
+  text-transform: uppercase;
+  font-weight: 500;
+}
+
+/* ─── Search container — floating top-center ─────────────────────────────────*/
+.mw-search-container {
+  position: absolute;
+  top: 10px;
+  left: 10px;
+  z-index: 250;
+  width: 340px;
+  max-width: calc(100vw - 32px);
+}
+
+/* ─── Search wrapper (the visible pill) ──────────────────────────────────────*/
+.mw-search-wrapper {
+  position: relative;
+  display: flex;
+  align-items: center;
+  height: 36px;
+  border-radius: 6px;
+  background: rgba(10, 10, 16, 0.88);
+  backdrop-filter: blur(28px) saturate(160%);
+  -webkit-backdrop-filter: blur(28px) saturate(160%);
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  box-shadow: 0 4px 20px rgba(0, 0, 0, 0.55);
+  transition: border-color 0.2s ease, box-shadow 0.2s ease;
+  overflow: visible;
+}
+
+.mw-search-wrapper--focused {
+  border-color: rgba(139, 92, 246, 0.45);
+  box-shadow:
+    0 8px 40px rgba(0, 0, 0, 0.55),
+    0 0 0 3px rgba(139, 92, 246, 0.12),
+    0 1px 0 rgba(255, 255, 255, 0.06) inset;
+}
+
+/* ─── Search icon ────────────────────────────────────────────────────────────*/
+.mw-search-icon {
+  position: absolute;
+  left: 15px;
+  width: 17px;
+  height: 17px;
+  color: rgba(255, 255, 255, 0.35);
+  pointer-events: none;
+  flex-shrink: 0;
+  transition: color 0.2s;
+}
+
+.mw-search-wrapper--focused .mw-search-icon {
+  color: rgba(139, 92, 246, 0.7);
+}
+
+/* ─── Input ──────────────────────────────────────────────────────────────────*/
+.mw-search-input {
+  width: 100%;
+  height: 100%;
+  padding: 0 44px 0 44px;
+  background: transparent;
+  border: none;
+  outline: none;
+  color: rgba(255, 255, 255, 0.92);
+  font-family: inherit;
+  font-size: 14px;
+  font-weight: 400;
+  letter-spacing: 0.015em;
+  caret-color: rgba(139, 92, 246, 0.9);
+}
+
+.mw-search-input::placeholder {
+  color: rgba(255, 255, 255, 0.22);
+}
+
+/* ─── Custom predictions dropdown ────────────────────────────────────────────*/
+/* Mirrors the visual style of Google's .pac-container that was previously     */
+/* used with the now-deprecated Autocomplete widget.                            */
+.mw-predictions {
+  position: absolute;
+  top: calc(100% + 6px);
+  left: 0;
+  right: 0;
+  border-radius: 12px;
+  border: 1px solid rgba(255, 255, 255, 0.09);
+  background: rgba(12, 12, 20, 0.92);
+  backdrop-filter: blur(28px) saturate(160%);
+  -webkit-backdrop-filter: blur(28px) saturate(160%);
+  box-shadow: 0 16px 48px rgba(0, 0, 0, 0.6);
+  overflow: hidden;
+  z-index: 50;
+}
+
+.mw-prediction-item {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  padding: 10px 14px;
+  border-top: 1px solid rgba(255, 255, 255, 0.05);
+  color: rgba(255, 255, 255, 0.65);
+  font-size: 13px;
+  cursor: pointer;
+  transition: background 0.12s;
+}
+
+.mw-prediction-item:first-child {
+  border-top: none;
+}
+
+.mw-prediction-item:hover,
+.mw-prediction-item--active {
+  background: rgba(139, 92, 246, 0.12);
+}
+
+.mw-prediction-pin {
+  width: 14px;
+  height: 14px;
+  flex-shrink: 0;
+  margin-top: 1px;
+  color: rgba(255, 255, 255, 0.3);
+}
+
+.mw-prediction-main {
+  color: rgba(255, 255, 255, 0.88);
+  font-size: 13px;
+  font-weight: 500;
+  line-height: 1.3;
+}
+
+.mw-prediction-sub {
+  color: rgba(255, 255, 255, 0.4);
+  font-size: 11.5px;
+  margin-top: 2px;
+  line-height: 1.3;
+}
+
+/* ─── Clear button ───────────────────────────────────────────────────────────*/
+.mw-search-clear {
+  position: absolute;
+  right: 10px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 28px;
+  height: 28px;
+  border-radius: 50%;
+  background: rgba(255, 255, 255, 0.06);
+  border: none;
+  cursor: pointer;
+  padding: 0;
+  transition: background 0.15s;
+  flex-shrink: 0;
+}
+
+.mw-search-clear:hover {
+  background: rgba(255, 255, 255, 0.12);
+}
+
+.mw-search-clear svg {
+  width: 12px;
+  height: 12px;
+  color: rgba(255, 255, 255, 0.4);
+}
+
+/* ─── Coord hint badge ───────────────────────────────────────────────────────*/
+.mw-coord-badge {
+  position: absolute;
+  bottom: -30px;
+  left: 44px;
+  font-size: 11px;
+  color: rgba(139, 92, 246, 0.75);
+  letter-spacing: 0.03em;
+  white-space: nowrap;
+  pointer-events: none;
+  animation: mw-fade-in 0.18s ease;
+}
+
+@keyframes mw-fade-in {
+  from {
+    opacity: 0;
+    transform: translateY(-4px);
+  }
+
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+/* ─── Native control z-index ─────────────────────────────────────────────────*/
+/* Ensure Google's map type bar and any dropdowns it opens always sit above
+   our own floating panels (z-index 20). The .gm-bundled-control and
+   .gm-style-mtc nodes are the map type tab row; bumping them to 30 keeps
+   them clearly visible and their selection overlays unreachable by our CSS. */
+.gm-style .gm-bundled-control,
+.gm-style .gm-style-mtc,
+.gm-style .gm-style-mtc-bbw {
+  z-index: 30 !important;
+}
+
+/* ─── Native control polish — nudge them away from our search bar ────────────*/
+/* Right-side controls already in the safe zone via ControlPosition options */
+
+/* ─── Polygon "Done Editing" button ──────────────────────────────────────────*/
+.poly-edit-done-btn {
+  position: absolute;
+  bottom: 36px;
+  left: 50%;
+  transform: translateX(-50%);
+  z-index: 25;
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  padding: 10px 28px;
+  background: rgba(10, 14, 26, 0.82);
+  backdrop-filter: blur(14px);
+  -webkit-backdrop-filter: blur(14px);
+  border: 1.5px solid rgba(0, 212, 255, 0.55);
+  border-radius: 50px;
+  color: #00d4ff;
+  font-family: 'Inter', system-ui, -apple-system, sans-serif;
+  font-size: 13px;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  cursor: pointer;
+  box-shadow: 0 4px 20px rgba(0, 212, 255, 0.18), 0 2px 8px rgba(0, 0, 0, 0.45);
+  transition: background 0.15s, border-color 0.15s, box-shadow 0.15s, transform 0.12s;
+  animation: poly-done-rise 0.22s cubic-bezier(0.34, 1.56, 0.64, 1) both;
+}
+
+.poly-edit-done-btn:hover {
+  background: rgba(0, 212, 255, 0.14);
+  border-color: #00d4ff;
+  box-shadow: 0 4px 28px rgba(0, 212, 255, 0.35), 0 2px 8px rgba(0, 0, 0, 0.5);
+  transform: translateX(-50%) translateY(-2px);
+}
+
+.poly-edit-done-btn:active {
+  transform: translateX(-50%) scale(0.96);
+}
+
+@keyframes poly-done-rise {
+  from {
+    opacity: 0;
+    transform: translateX(-50%) translateY(14px);
+  }
+
+  to {
+    opacity: 1;
+    transform: translateX(-50%) translateY(0);
+  }
+}
+
+/* ─── Floor Plan Overlay Handles ─────────────────────────────────────────────*/
+.fp-overlay-container:not(.fp-locked) {
+  outline: 2px solid #00ff00;
+  box-shadow: 0 0 10px rgba(0, 0, 0, 0.4);
+}
+
+.fp-handle {
+  width: 12px;
+  height: 12px;
+  background: rgba(0, 255, 0, 0.4);
+  border: 1.5px solid #00ff00;
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.5);
+  z-index: 100;
+}
+
+.fp-locked .fp-handle {
+  display: none !important;
+}
+
+.fp-handle:hover {
+  background: #00ff00;
+  transform: scale(1.2);
+}
+
+.fp-handle-nw {
+  top: -6px;
+  left: -6px;
+}
+
+.fp-handle-ne {
+  top: -6px;
+  right: -6px;
+}
+
+.fp-handle-sw {
+  bottom: -6px;
+  left: -6px;
+}
+
+.fp-handle-se {
+  bottom: -6px;
+  right: -6px;
+}
+
+.fp-handle-n {
+  top: -6px;
+  left: calc(50% - 6px);
+}
+
+.fp-handle-s {
+  bottom: -6px;
+  left: calc(50% - 6px);
+}
+
+.fp-handle-e {
+  top: calc(50% - 6px);
+  right: -6px;
+}
+
+.fp-handle-w {
+  top: calc(50% - 6px);
+  left: -6px;
+}
+
+.fp-handle-rotate {
+  top: -30px;
+  left: calc(50% - 6px);
+  background: #00ff00;
+  border: 1.5px solid #fff;
+  border-radius: 50%;
+}
+
+.fp-handle-rotate::after {
+  content: '';
+  position: absolute;
+  top: 10.5px;
+  left: 4.5px;
+  width: 1.5px;
+  height: 18px;
+  background: #00ff00;
+  z-index: -1;
+}
+
+.fp-handle-center {
+  top: calc(50% - 10px);
+  left: calc(50% - 10px);
+  width: 20px;
+  height: 20px;
+  background: transparent !important;
+  border: none !important;
+  box-shadow: none !important;
+}
+
+.fp-handle-center::before,
+.fp-handle-center::after {
+  content: '';
+  position: absolute;
+  background: #00ff00;
+  box-shadow: 0 0 2px rgba(0, 0, 0, 0.8);
+}
+
+.fp-handle-center::before {
+  top: 9px;
+  left: 0;
+  right: 0;
+  height: 2px;
+}
+
+.fp-handle-center::after {
+  left: 9px;
+  top: 0;
+  bottom: 0;
+  width: 2px;
+}
+
+.fp-handle-center:hover {
+  transform: scale(1.1);
+}
+
+/* ─── GE Pro top toolbar ─────────────────────────────────────────────────── */
+.mw-top-toolbar {
+  position: absolute;
+  top: 10px;
+  left: 360px;
+  /* search width (340) + 20px gap */
+  right: 10px;
+  z-index: 20;
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  height: 36px;
+  background: rgba(10, 10, 16, 0.88);
+  backdrop-filter: blur(28px);
+  -webkit-backdrop-filter: blur(28px);
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  border-radius: 6px;
+  padding: 0 6px;
+  box-shadow: 0 4px 20px rgba(0, 0, 0, 0.55);
+  overflow: hidden;
+}
+
+.mw-toolbar-sep {
+  width: 1px;
+  height: 20px;
+  background: rgba(255, 255, 255, 0.12);
+  margin: 0 3px;
+  flex-shrink: 0;
+}
+
+.mw-toolbar-btn {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 1px;
+  min-width: 44px;
+  height: 30px;
+  padding: 0 6px;
+  background: transparent;
+  border: none;
+  border-radius: 4px;
+  color: rgba(255, 255, 255, 0.55);
+  cursor: pointer;
+  font-family: 'Inter', system-ui, sans-serif;
+  flex-shrink: 0;
+  transition: background 0.12s, color 0.12s;
+}
+
+.mw-toolbar-btn:hover {
+  background: rgba(255, 255, 255, 0.08);
+  color: rgba(255, 255, 255, 0.9);
+}
+
+.mw-toolbar-btn--active {
+  background: rgba(0, 180, 200, 0.15);
+  color: #00ced1;
+}
+
+.mw-toolbar-btn svg {
+  width: 16px;
+  height: 16px;
+}
+
+.mw-toolbar-label {
+  font-size: 9px;
+  font-weight: 500;
+  white-space: nowrap;
+  letter-spacing: 0.02em;
+}
+
+.mw-toolbar-export-wrap {
+  position: relative;
+  flex-shrink: 0;
+}
+
+.mw-toolbar-export-dropdown {
+  position: absolute;
+  top: calc(100% + 6px);
+  left: 0;
+  background: #1e1e1e;
+  border: 1px solid #444;
+  border-radius: 5px;
+  padding: 4px;
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  z-index: 1000;
+  min-width: 170px;
+  box-shadow: 0 6px 20px rgba(0, 0, 0, 0.6);
+}
+
+.mw-toolbar-export-item {
+  background: transparent;
+  border: none;
+  color: #ddd;
+  padding: 7px 10px;
+  border-radius: 3px;
+  cursor: pointer;
+  text-align: left;
+  font-size: 11px;
+  font-family: inherit;
+}
+
+.mw-toolbar-export-item:hover {
+  background: #333;
+}

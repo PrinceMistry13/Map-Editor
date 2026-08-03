@@ -1,0 +1,107 @@
+.fp-bottom-panel {
+  position: absolute;
+  bottom: 24px;
+  left: 50%;
+  transform: translateX(-50%);
+  background: #1e1e24;
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  border-radius: 8px;
+  padding: 8px 16px;
+  display: flex;
+  align-items: center;
+  gap: 16px;
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.3);
+  z-index: 50;
+  color: #e2e8f0;
+  font-family: inherit;
+  font-size: 13px;
+  height: 52px;
+  box-sizing: border-box;
+}
+
+.fp-bp-mode-switch {
+  display: flex;
+  background: rgba(255, 255, 255, 0.05);
+  border-radius: 4px;
+  padding: 2px;
+}
+
+.fp-bp-btn {
+  background: transparent;
+  border: none;
+  color: #94a3b8;
+  padding: 6px 12px;
+  border-radius: 3px;
+  cursor: pointer;
+  font-size: 13px;
+  transition: all 0.2s;
+}
+
+.fp-bp-btn:hover {
+  color: #fff;
+}
+
+.fp-bp-btn.active {
+  background: #00CED1;
+  color: #000;
+  font-weight: 600;
+}
+
+.fp-bp-divider {
+  width: 1px;
+  height: 24px;
+  background: rgba(255, 255, 255, 0.1);
+}
+
+.fp-bp-group {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.fp-bp-label {
+  color: #94a3b8;
+}
+
+.fp-bp-checkbox-label {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  cursor: pointer;
+  color: #cbd5e1;
+}
+
+.fp-bp-actions {
+  gap: 6px;
+}
+
+.fp-bp-action-btn {
+  background: rgba(255, 255, 255, 0.05);
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  color: #e2e8f0;
+  padding: 4px 10px;
+  border-radius: 4px;
+  cursor: pointer;
+  font-size: 12px;
+  transition: background 0.2s;
+}
+
+.fp-bp-action-btn:hover {
+  background: rgba(255, 255, 255, 0.1);
+}
+
+.fp-bp-action-btn--danger {
+  color: #ef4444;
+  border-color: rgba(239, 68, 68, 0.3);
+}
+
+.fp-bp-action-btn--danger:hover {
+  background: rgba(239, 68, 68, 0.1);
+  border-color: rgba(239, 68, 68, 0.5);
+}
+
+.fp-bp-gcp-hint {
+  color: #a78bfa;
+  font-style: italic;
+  white-space: nowrap;
+}
