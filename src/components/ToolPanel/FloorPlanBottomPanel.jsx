@@ -4,8 +4,9 @@ import './FloorPlanBottomPanel.css';
 import '../Dialogs/Dialogs.css'; // For the confirmation dialog styles
 
 export default function FloorPlanBottomPanel() {
-  const { floorPlanMode, setFloorPlanMode, selectedFloorPlanId, setSelectedFloorPlanId, floorPlanManagerRef } = useWorkspace();
+  const { floorPlanMode, setFloorPlanMode, selectedFloorPlanId, setSelectedFloorPlanId, floorPlanManagerRef, beginAutoPlotReview } = useWorkspace();
   const [showDeleteConfirm, setShowDeleteConfirm] = useState(false);
+  const [isAutoPlotting, setIsAutoPlotting] = useState(false);
   
   const fpEntry = selectedFloorPlanId ? floorPlanManagerRef.current?.overlays.get(selectedFloorPlanId) : null;
   
@@ -50,6 +51,12 @@ export default function FloorPlanBottomPanel() {
 
   const handleSave = () => {
     floorPlanManagerRef.current?.downloadSave(selectedFloorPlanId);
+  };
+
+  const handleAutoPlotClick = async () => {
+    setIsAutoPlotting(true);
+    await beginAutoPlotReview(selectedFloorPlanId);
+    setIsAutoPlotting(false);
   };
 
   const handleDeleteClick = () => {
@@ -116,6 +123,9 @@ export default function FloorPlanBottomPanel() {
           <div className="fp-bp-group fp-bp-actions">
             <button className="fp-bp-action-btn" onClick={handleReset}>Reset</button>
             <button className="fp-bp-action-btn" onClick={handleToggleLock}>{isLocked ? "Unlock" : "Lock"}</button>
+            <button className="fp-bp-action-btn" onClick={handleAutoPlotClick} disabled={!isLocked || isAutoPlotting}>
+              {isAutoPlotting ? 'Plotting...' : 'Auto-Plot Units'}
+            </button>
             <button className="fp-bp-action-btn" onClick={handleSave}>Save</button>
           </div>
         </div>

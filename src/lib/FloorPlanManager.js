@@ -239,6 +239,45 @@ export default class FloorPlanManager {
     }
   }
 
+  // Generalized pixel to lat/lng projection for arbitrary pixel coordinates in the image
+  projectPixelsToLatLngs(id, pixels, W, H) {
+    const entry = this.overlays.get(id);
+    if (!entry) return null;
+    const { overlay } = entry;
+
+    const scaleX = overlay.widthMeters / W;
+    const scaleY = overlay.heightMeters / H;
+
+    let H_matrix = null;
+    if (overlay.distortedCorners) {
+      const dc = overlay.distortedCorners;
+      const src = [
+        {x: 0, y: 0},
+        {x: W, y: 0},
+        {x: W, y: H},
+        {x: 0, y: H}
+      ];
+      const dst = [
+        {x: dc.nw.lng, y: dc.nw.lat},
+        {x: dc.ne.lng, y: dc.ne.lat},
+        {x: dc.se.lng, y: dc.se.lat},
+        {x: dc.sw.lng, y: dc.sw.lat}
+      ];
+      H_matrix = solveHomography(src, dst);
+    }
+
+    return pixels.map((p) => {
+      if (H_matrix) {
+        const pt = mapPoint(p.x, p.y, H_matrix);
+        return { lat: pt.y, lng: pt.x };
+      } else {
+        const dx = (p.x - W / 2) * scaleX;
+        const dy = (H / 2 - p.y) * scaleY;
+        return this.pointToLatLng(overlay, dx, dy);
+      }
+    });
+  }
+
   // Returns array of objects formatted exactly as requested
   getState() {
     return Array.from(this.overlays.values()).map(entry => {

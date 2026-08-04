@@ -59,6 +59,7 @@ export function WorkspaceProvider({ children }) {
   const [gcpPoints, setGCPPoints] = useState([]); // { id, img: {x,y}, map: {lat,lng}, error }
   const [pendingImgPt, setPendingImgPt] = useState(null); // {x, y}
   const [activeLayerId, setActiveLayerId] = useState('layer-1');
+  const [isAutoPlotReviewMode, setIsAutoPlotReviewMode] = useState(false);
 
   const polygonManagerRef = useRef(null);
   const pinManagerRef = useRef(null);
@@ -170,6 +171,69 @@ export function WorkspaceProvider({ children }) {
     floorPlans: floorPlanManagerRef.current?.getState() ?? [],
   }), [project]);
 
+  // ── Auto-Plot Units ────────────────────────────────────────────────────────
+  const beginAutoPlotReview = useCallback(async (floorPlanId) => {
+    try {
+      const { detectUnitsFromImage } = await import('../utils/autoPlot');
+      const paths = await detectUnitsFromImage(floorPlanManagerRef.current, floorPlanId);
+      
+      const pm = polygonManagerRef.current;
+      if (!pm) return;
+      
+      paths.forEach(path => {
+        const polyId = nextId('poly');
+        pm.createPolygon(polyId, `Unit ${pm.polygons.size + 1}`, path, 'pending-unit', activeLayerId, '#ff9800');
+      });
+      setIsAutoPlotReviewMode(true);
+    } catch (err) {
+      console.error(err);
+      alert(err.message);
+    }
+  }, [activeLayerId]);
+
+  const confirmAutoPlotUnits = useCallback(() => {
+    const pm = polygonManagerRef.current;
+    if (!pm) return;
+    
+    const changedIds = [];
+    pm.polygons.forEach(entry => {
+      if (entry.category === 'pending-unit') {
+        entry.category = 'unit';
+        entry.color = '#ff6b6b';
+        entry.gPolygon.setOptions({ strokeColor: '#ff6b6b', fillColor: '#ff6b6b' });
+        changedIds.push({ id: entry.id, path: entry.gPolygon.getPath().getArray().map(ll => ({lat: ll.lat(), lng: ll.lng()})), name: entry.name, layerId: entry.layerId });
+      }
+    });
+    
+    if (changedIds.length > 0) {
+      pushThunk({
+        undo: () => {
+          changedIds.forEach(({id}) => pm.deletePolygon(id, true));
+          pm.callbacks.onChange && pm.callbacks.onChange();
+        },
+        redo: () => {
+          changedIds.forEach(data => pm.createPolygon(data.id, data.name, data.path, 'unit', data.layerId, '#ff6b6b'));
+          pm.callbacks.onChange && pm.callbacks.onChange();
+        }
+      });
+    }
+    
+    setIsAutoPlotReviewMode(false);
+  }, [pushThunk]);
+
+  const cancelAutoPlotUnits = useCallback(() => {
+    const pm = polygonManagerRef.current;
+    if (!pm) return;
+    
+    const toDelete = [];
+    pm.polygons.forEach(entry => {
+      if (entry.category === 'pending-unit') toDelete.push(entry.id);
+    });
+    toDelete.forEach(id => pm.deletePolygon(id, true));
+    
+    setIsAutoPlotReviewMode(false);
+  }, []);
+
   return (
     <WorkspaceContext.Provider
       value={{
@@ -214,6 +278,10 @@ export function WorkspaceProvider({ children }) {
         updateLayer,
         toggleLayerVisibility,
         reorderLayers,
+        isAutoPlotReviewMode,
+        beginAutoPlotReview,
+        confirmAutoPlotUnits,
+        cancelAutoPlotUnits,
         DUMMY_PORTFOLIOS,
         DUMMY_PROJECTS,
       }}

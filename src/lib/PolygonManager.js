@@ -14,14 +14,26 @@ export default class PolygonManager {
     this.map = map;
     this.callbacks = callbacks; // { onSelect(entry, latLng), onEditToggle, onChange(), pushHistory({undo, redo}) }
     this.polygons = new Map(); // id -> { id, name, category, gPolygon }
-    this.zCounter = 10;
+    this.zCounter = 0;
     this.selectedId = null;
     this.isEditing = false;
   }
 
+  getBaseZIndex(category) {
+    if (category === 'project') return 10000;
+    if (category === 'landmark') return 20000;
+    if (category === 'unit') return 30000;
+    if (category === 'pending-unit') return 40000;
+    return 10000;
+  }
+
   // ---------------------------------------------------------------- lifecycle
   createPolygon(id, name, path, category = 'project', layerId = 'layer-1', color = null) {
-    const defaultColor = category === 'landmark' ? '#a855f7' : '#00d4ff';
+    let defaultColor = '#00d4ff';
+    if (category === 'landmark') defaultColor = '#a855f7';
+    else if (category === 'unit') defaultColor = '#ff6b6b';
+    else if (category === 'pending-unit') defaultColor = '#ff9800';
+
     const finalColor = color || defaultColor;
     const gPolygon = new window.google.maps.Polygon({
       map: this.map,
@@ -32,7 +44,7 @@ export default class PolygonManager {
       fillOpacity: 0.12,
       editable: false,
       clickable: true,
-      zIndex: ++this.zCounter,
+      zIndex: this.getBaseZIndex(category) + (++this.zCounter),
     });
     const entry = { id, name, category, layerId, color: finalColor, gPolygon };
     this.polygons.set(id, entry);
@@ -68,7 +80,8 @@ export default class PolygonManager {
         return;
       }
       e.domEvent && e.domEvent.stopPropagation();
-      gPolygon.setOptions({ zIndex: ++this.zCounter });
+      const currentCategory = this.polygons.get(id)?.category || 'project';
+      gPolygon.setOptions({ zIndex: this.getBaseZIndex(currentCategory) + (++this.zCounter) });
       this.select(id, e.latLng ? e.latLng.toJSON() : null);
     });
 
@@ -162,8 +175,16 @@ export default class PolygonManager {
     entry.category = category;
 
     const applyColor = (cat) => {
-      const color = cat === 'landmark' ? '#a855f7' : '#00d4ff';
-      entry.gPolygon.setOptions({ strokeColor: color, fillColor: color });
+      let color = '#00d4ff';
+      if (cat === 'landmark') color = '#a855f7';
+      else if (cat === 'unit') color = '#ff6b6b';
+      else if (cat === 'pending-unit') color = '#ff9800';
+      const baseZ = this.getBaseZIndex(cat);
+      entry.gPolygon.setOptions({ 
+        strokeColor: color, 
+        fillColor: color,
+        zIndex: baseZ + (++this.zCounter)
+      });
     };
     applyColor(category);
 

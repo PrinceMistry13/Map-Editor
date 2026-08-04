@@ -292,6 +292,9 @@ function MapWorkspaceInner() {
     pinManagerRef,
     floorPlanManagerRef,
     activeLayerId,
+    isAutoPlotReviewMode,
+    confirmAutoPlotUnits,
+    cancelAutoPlotUnits,
   } = useWorkspace();
 
   const [tick, setTick] = useState(0);
@@ -608,11 +611,11 @@ function MapWorkspaceInner() {
   // (and it never becomes editable) until "Done" is pressed.
   const beginNaming = useCallback((path) => {
     const count = (polygonManagerRef.current?.polygons.size ?? 0) + 1;
-    setPendingName(`Boundary ${count}`);
-    setPendingCategory('project');
+    setPendingName(isAutoPlotReviewMode ? `Unit ${count}` : `Boundary ${count}`);
+    setPendingCategory(isAutoPlotReviewMode ? 'pending-unit' : 'project');
     setPendingPolygon({ path });
     setActiveTool(null);
-  }, [setActiveTool, polygonManagerRef]);
+  }, [setActiveTool, polygonManagerRef, isAutoPlotReviewMode]);
 
   const beginNamingRef = useRef(beginNaming);
   useEffect(() => { beginNamingRef.current = beginNaming; }, [beginNaming]);
@@ -1394,11 +1397,49 @@ function MapWorkspaceInner() {
               >
                 Landmark
               </button>
+              {isAutoPlotReviewMode && (
+                <button
+                  type="button"
+                  className={`pp-cat${pendingCategory === 'pending-unit' ? ' pp-cat--active' : ''}`}
+                  onClick={() => setPendingCategory('pending-unit')}
+                >
+                  Unit
+                </button>
+              )}
             </div>
             <div className="poly-popup-actions poly-modal-actions">
               <button className="poly-popup-btn" onClick={cancelPendingPolygon}>Cancel</button>
               <button className="poly-popup-btn poly-popup-btn--primary" onClick={confirmPendingPolygon}>Done</button>
             </div>
+          </div>
+        </div>
+      )}
+
+      {/* Auto-Plot Review Mode Floating Panel */}
+      {isAutoPlotReviewMode && (
+        <div style={{
+          position: 'absolute', top: 20, left: '50%', transform: 'translateX(-50%)',
+          background: 'rgba(30, 41, 59, 0.95)', border: '1px solid rgba(255, 255, 255, 0.1)',
+          padding: '16px 24px', borderRadius: '12px', zIndex: 1000,
+          display: 'flex', alignItems: 'center', gap: '20px',
+          boxShadow: '0 8px 32px rgba(0,0,0,0.4)', backdropFilter: 'blur(10px)',
+          color: 'white', fontFamily: 'Inter, sans-serif'
+        }}>
+          <div>
+            <div style={{ fontSize: '15px', fontWeight: 600, marginBottom: '4px' }}>Review Detected Units</div>
+            <div style={{ fontSize: '13px', color: '#94a3b8' }}>
+              Delete false positives, edit vertices, or draw missing units.
+            </div>
+          </div>
+          <div style={{ display: 'flex', gap: '12px' }}>
+            <button onClick={cancelAutoPlotUnits} style={{
+              background: 'transparent', border: '1px solid rgba(255,255,255,0.2)', color: 'white',
+              padding: '8px 16px', borderRadius: '6px', cursor: 'pointer', fontSize: '14px', fontWeight: 500
+            }}>Cancel</button>
+            <button onClick={confirmAutoPlotUnits} style={{
+              background: '#00d4ff', border: 'none', color: '#0f172a',
+              padding: '8px 16px', borderRadius: '6px', cursor: 'pointer', fontSize: '14px', fontWeight: 600
+            }}>Confirm Units</button>
           </div>
         </div>
       )}

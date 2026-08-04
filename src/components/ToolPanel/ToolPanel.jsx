@@ -143,7 +143,14 @@ const generateKMLString = (data, isKMZ = false) => {
   if (data.polygons) {
     data.polygons.forEach((poly, i) => {
       if (!poly.path || poly.path.length < 3) return;
-      const coords = [...poly.path, poly.path[0]].map(p => `${p.lng},${p.lat},2`).join(' ');
+      
+      let drawOrder = 1;
+      if (poly.category === 'landmark') { drawOrder = 2; }
+      else if (poly.category === 'unit') { drawOrder = 3; }
+      else if (poly.category === 'pending-unit') { drawOrder = 4; }
+
+      // Use Z=0 since we are clamping to ground
+      const coords = [...poly.path, poly.path[0]].map(p => `${p.lng},${p.lat},0`).join(' ');
       
       let styleStr = '';
       if (poly.color) {
@@ -172,7 +179,8 @@ const generateKMLString = (data, isKMZ = false) => {
     <Placemark>
       <name>${poly.name || `Polygon ${i+1}`}</name>${styleStr}
       <Polygon>
-        <altitudeMode>relativeToGround</altitudeMode>
+        <altitudeMode>clampToGround</altitudeMode>
+        <gx:drawOrder>${drawOrder}</gx:drawOrder>
         <extrude>0</extrude>
         <outerBoundaryIs>
           <LinearRing>
@@ -264,6 +272,7 @@ const generateKMLString = (data, isKMZ = false) => {
         kml += `
     <GroundOverlay>
       <name>${name}</name>
+      <gx:drawOrder>0</gx:drawOrder>
       <Icon>
         <href>${href}</href>
       </Icon>
@@ -281,6 +290,7 @@ const generateKMLString = (data, isKMZ = false) => {
         kml += `
     <GroundOverlay>
       <name>${name}</name>
+      <gx:drawOrder>0</gx:drawOrder>
       <Icon>
         <href>${href}</href>
       </Icon>
@@ -400,8 +410,20 @@ export default function ToolPanel() {
       lng = data.pins[0].position.lng;
     }
 
-    const polygon = data.polygons?.[0]?.path || [{ lat: 0, lng: 0 }];
-    const unitPolygons = data.polygons?.length > 0 ? data.polygons.map(p => p.path) : [[{ lat: 0, lng: 0 }]];
+    const polygon = data.polygons?.find(p => p.category === 'project')?.path || [{ lat: 0, lng: 0 }];
+    const unitPolygonsList = data.polygons?.filter(p => p.category === 'unit') || [];
+    const unitPolygons = unitPolygonsList.length > 0 ? unitPolygonsList.map(p => p.path) : [];
+
+    const units = unitPolygonsList.length > 0 
+      ? unitPolygonsList.map((p, index) => ({
+          id: index + 1,
+          sqyd: 126.22,
+          length: "47'4",
+          width: "24'0",
+          status: "AVAILABLE",
+          orientation: "  east"
+        }))
+      : [{ id: 1, sqyd: 126.22, length: "47'4", width: "24'0", status: "AVAILABLE", orientation: "  east" }];
 
     const floorplanEntry = data.floorPlans?.[0] || {};
     const bounds = floorplanEntry.bounds || {
@@ -422,15 +444,19 @@ export default function ToolPanel() {
         },
         location: {
           text: "",
-          areaText: "",
+          areaText: "Kosad Surat, Surat",
           googleMapLink: "",
           mapEmbedUrl: ""
         },
-        brochures: [],
-        legal: [],
-        photos: {},
-        videos: [],
-        floorplans: {},
+        brochures: ["brochure1.pdf", "brochure2.pdf"],
+        legal: ["legal1.pdf", "legal2.pdf"],
+        photos: {
+          albumName: ["image1.jpg", "image2.jpg"]
+        },
+        videos: ["video1.mp4", "video2.mp4"],
+        floorplans: {
+          albumName: ["image1.jpg", "image2.jpg"]
+        },
         pinUrl: "External-Files/Assets/Pins",
         lat,
         lng,
@@ -439,9 +465,7 @@ export default function ToolPanel() {
         bounds,
         unitPolygonsGPS: true,
         unitPolygons,
-        units: [
-          { id: 1, sqyd: 0, length: "", width: "", status: "AVAILABLE", orientation: "" }
-        ]
+        units
       }
     };
 
