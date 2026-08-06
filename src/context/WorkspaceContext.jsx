@@ -175,14 +175,15 @@ export function WorkspaceProvider({ children }) {
   const beginAutoPlotReview = useCallback(async (floorPlanId) => {
     try {
       const { detectUnitsFromImage } = await import('../utils/autoPlot');
-      const paths = await detectUnitsFromImage(floorPlanManagerRef.current, floorPlanId);
+      const detectedPlots = await detectUnitsFromImage(floorPlanManagerRef.current, floorPlanId);
       
       const pm = polygonManagerRef.current;
       if (!pm) return;
       
-      paths.forEach(path => {
+      detectedPlots.forEach(plot => {
         const polyId = nextId('poly');
-        pm.createPolygon(polyId, `Unit ${pm.polygons.size + 1}`, path, 'pending-unit', activeLayerId, '#ff9800');
+        const plotName = plot.id ? String(plot.id) : 'Unit ? (Manual)';
+        pm.createPolygon(polyId, plotName, plot.path, 'pending-unit', activeLayerId, '#ff9800');
       });
       setIsAutoPlotReviewMode(true);
     } catch (err) {

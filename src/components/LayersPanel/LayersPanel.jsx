@@ -346,7 +346,19 @@ export default function LayersPanel({ tick = 0 }) {
                       </div>
                     )}
                   </div>
-                  {children.map(child => {
+                  {children.sort((a, b) => {
+                      if (a.type === 'polygon' && b.type === 'polygon' && a.category.includes('unit') && b.category.includes('unit')) {
+                          const numA = parseInt(a.name, 10);
+                          const numB = parseInt(b.name, 10);
+                          const isNumA = !isNaN(numA) && numA.toString() === a.name.trim();
+                          const isNumB = !isNaN(numB) && numB.toString() === b.name.trim();
+                          if (isNumA && isNumB) return numA - numB;
+                          if (isNumA && !isNumB) return -1;
+                          if (!isNumA && isNumB) return 1;
+                          return a.name.localeCompare(b.name);
+                      }
+                      return 0;
+                  }).map(child => {
                     const isChildSelected = child.id === selectedLayerItemId;
                     return (
                       <div

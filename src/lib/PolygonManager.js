@@ -28,7 +28,7 @@ export default class PolygonManager {
   }
 
   // ---------------------------------------------------------------- lifecycle
-  createPolygon(id, name, path, category = 'project', layerId = 'layer-1', color = null) {
+  createPolygon(id, name, path, category = 'project', layerId = 'layer-1', color = null, metadata = {}) {
     let defaultColor = '#00d4ff';
     if (category === 'landmark') defaultColor = '#a855f7';
     else if (category === 'unit') defaultColor = '#ff6b6b';
@@ -46,7 +46,7 @@ export default class PolygonManager {
       clickable: true,
       zIndex: this.getBaseZIndex(category) + (++this.zCounter),
     });
-    const entry = { id, name, category, layerId, color: finalColor, gPolygon };
+    const entry = { id, name, category, layerId, color: finalColor, gPolygon, metadata };
     this.polygons.set(id, entry);
 
     let pathSnapshotBefore = null;
@@ -234,6 +234,10 @@ export default class PolygonManager {
   deletePolygon(id, skipHistory) {
     const entry = this.polygons.get(id);
     if (!entry) return;
+    
+    // Save map order for undo to ensure array indices stay synced
+    const mapKeys = Array.from(this.polygons.keys());
+    
     const path = entry.gPolygon.getPath().getArray().map((ll) => ({ lat: ll.lat(), lng: ll.lng() }));
     const { name, category } = entry;
     entry.gPolygon.setMap(null);
@@ -242,13 +246,41 @@ export default class PolygonManager {
       this.selectedId = null;
       this.callbacks.onSelect && this.callbacks.onSelect(null, null);
     }
+    
+
+
     if (!skipHistory) {
       this.callbacks.pushHistory && this.callbacks.pushHistory({
-        undo: () => { this.loadPolygon({ id, name, category, path, layerId: entry.layerId, color: entry.color }); },
-        redo: () => { this.deletePolygon(id, true); },
+        undo: () => { 
+           // 1. restore the deleted polygon
+           this.loadPolygon({ id, name, category, path, layerId: entry.layerId, color: entry.color });
+           
+
+           // 3. restore original Map insertion order
+           const restoredMap = new Map();
+           for (const k of mapKeys) {
+             if (this.polygons.has(k)) {
+               restoredMap.set(k, this.polygons.get(k));
+             }
+           }
+           this.polygons = restoredMap;
+           
+           this.callbacks.onChange && this.callbacks.onChange();
+           if (this.selectedId) {
+             const sel = this.polygons.get(this.selectedId);
+             if (sel) this.callbacks.onSelect && this.callbacks.onSelect({ ...sel });
+           }
+        },
+        redo: () => { 
+           this.deletePolygon(id, true); 
+        },
       });
     }
     this.callbacks.onChange && this.callbacks.onChange();
+    if (this.selectedId) {
+       const sel = this.polygons.get(this.selectedId);
+       if (sel) this.callbacks.onSelect && this.callbacks.onSelect({ ...sel });
+    }
   }
 
   metrics(id) {

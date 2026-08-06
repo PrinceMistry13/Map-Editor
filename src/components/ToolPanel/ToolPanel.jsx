@@ -3,6 +3,7 @@ import { useWorkspace } from '../../context/WorkspaceContext';
 import SaveProjectDialog from '../Dialogs/SaveProjectDialog';
 import OpenProjectDialog from '../Dialogs/OpenProjectDialog';
 import JSZip from 'jszip';
+import { polygonArea } from '../../utils/polygonMetrics';
 import './ToolPanel.css';
 
 // ─── Inline SVG icons ─────────────────────────────────────────────────────────
@@ -145,12 +146,28 @@ const generateKMLString = (data, isKMZ = false) => {
       if (!poly.path || poly.path.length < 3) return;
       
       let drawOrder = 1;
-      if (poly.category === 'landmark') { drawOrder = 2; }
-      else if (poly.category === 'unit') { drawOrder = 3; }
-      else if (poly.category === 'pending-unit') { drawOrder = 4; }
+      let altitude = 0;
+      let altMode = 'clampToGround';
+      
+      if (poly.category === 'project') {
+        altitude = 2;
+        altMode = 'relativeToGround';
+      } else if (poly.category === 'landmark') {
+        altitude = 3;
+        altMode = 'relativeToGround';
+        drawOrder = 2;
+      } else if (poly.category === 'unit') {
+        altitude = 4;
+        altMode = 'relativeToGround';
+        drawOrder = 3;
+      } else if (poly.category === 'pending-unit') {
+        altitude = 4;
+        altMode = 'relativeToGround';
+        drawOrder = 4;
+      }
 
-      // Use Z=0 since we are clamping to ground
-      const coords = [...poly.path, poly.path[0]].map(p => `${p.lng},${p.lat},0`).join(' ');
+      // Use altitude offset for stacking priority
+      const coords = [...poly.path, poly.path[0]].map(p => `${p.lng},${p.lat},${altitude}`).join(' ');
       
       let styleStr = '';
       if (poly.color) {
@@ -179,7 +196,7 @@ const generateKMLString = (data, isKMZ = false) => {
     <Placemark>
       <name>${poly.name || `Polygon ${i+1}`}</name>${styleStr}
       <Polygon>
-        <altitudeMode>clampToGround</altitudeMode>
+        <altitudeMode>${altMode}</altitudeMode>
         <gx:drawOrder>${drawOrder}</gx:drawOrder>
         <extrude>0</extrude>
         <outerBoundaryIs>
@@ -277,12 +294,7 @@ const generateKMLString = (data, isKMZ = false) => {
         <href>${href}</href>
       </Icon>
       <gx:LatLonQuad>
-        <coordinates>
-          ${sw.lng},${sw.lat},0
-          ${se.lng},${se.lat},0
-          ${ne.lng},${ne.lat},0
-          ${nw.lng},${nw.lat},0
-        </coordinates>
+        <coordinates>${sw.lng},${sw.lat},0 ${se.lng},${se.lat},0 ${ne.lng},${ne.lat},0 ${nw.lng},${nw.lat},0</coordinates>
       </gx:LatLonQuad>
     </GroundOverlay>`;
       } else {
@@ -411,19 +423,59 @@ export default function ToolPanel() {
     }
 
     const polygon = data.polygons?.find(p => p.category === 'project')?.path || [{ lat: 0, lng: 0 }];
-    const unitPolygonsList = data.polygons?.filter(p => p.category === 'unit') || [];
-    const unitPolygons = unitPolygonsList.length > 0 ? unitPolygonsList.map(p => p.path) : [];
+    const unitPolygonsList = data.polygons?.filter(p => p.category === 'unit' || p.category === 'pending-unit') || [];
+    const unitPolygons = unitPolygonsList.map((p, i) => {
+      const path = [...p.path];
+      if (path.length > 0) {
+        const first = path[0];
+        const last = path[path.length - 1];
+        if (first.lat !== last.lat || first.lng !== last.lng) {
+          path.push({ lat: first.lat, lng: first.lng });
+        }
+      }
+      return path; // Plot ${i + 1}
+    });
 
-    const units = unitPolygonsList.length > 0 
-      ? unitPolygonsList.map((p, index) => ({
-          id: index + 1,
-          sqyd: 126.22,
-          length: "47'4",
-          width: "24'0",
-          status: "AVAILABLE",
-          orientation: "  east"
-        }))
-      : [{ id: 1, sqyd: 126.22, length: "47'4", width: "24'0", status: "AVAILABLE", orientation: "  east" }];
+    const units = unitPolygonsList.map((p, index) => {
+      let areaSqMeters = 0;
+      let lengthStr = "";
+      let widthStr = "";
+      
+      if (p.path && p.path.length >= 3 && window.google?.maps?.geometry?.spherical) {
+        const latLngs = p.path.map(pt => new window.google.maps.LatLng(pt.lat, pt.lng));
+        areaSqMeters = polygonArea(latLngs);
+        
+        if (p.path.length === 4) {
+          const d1 = window.google.maps.geometry.spherical.computeDistanceBetween(latLngs[0], latLngs[1]);
+          const d2 = window.google.maps.geometry.spherical.computeDistanceBetween(latLngs[1], latLngs[2]);
+          const d3 = window.google.maps.geometry.spherical.computeDistanceBetween(latLngs[2], latLngs[3]);
+          const d4 = window.google.maps.geometry.spherical.computeDistanceBetween(latLngs[3], latLngs[0]);
+          
+          const maxL = Math.max(d1, d3);
+          const maxW = Math.max(d2, d4);
+          const formatFeet = (meters) => {
+             const totalInches = meters * 39.3701;
+             const feet = Math.floor(totalInches / 12);
+             const inches = Math.round(totalInches % 12);
+             return `${feet}'${inches}`;
+          };
+          
+          lengthStr = formatFeet(Math.max(maxL, maxW));
+          widthStr = formatFeet(Math.min(maxL, maxW));
+        }
+      }
+      
+      const sqyd = areaSqMeters > 0 ? (areaSqMeters * 1.19599).toFixed(2) : 0;
+      
+      return {
+        id: isNaN(parseInt(p.name, 10)) ? p.name : parseInt(p.name, 10),
+        sqyd: Number(sqyd),
+        length: lengthStr,
+        width: widthStr,
+        status: "AVAILABLE",
+        orientation: ""
+      };
+    });
 
     const floorplanEntry = data.floorPlans?.[0] || {};
     const bounds = floorplanEntry.bounds || {
