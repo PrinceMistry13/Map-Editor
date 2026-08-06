@@ -3,6 +3,7 @@ import { useWorkspace } from '../../context/WorkspaceContext';
 import SaveProjectDialog from '../Dialogs/SaveProjectDialog';
 import OpenProjectDialog from '../Dialogs/OpenProjectDialog';
 import JSZip from 'jszip';
+import { bakeFloorplanImage } from '../../utils/imageBake';
 import { polygonArea } from '../../utils/polygonMetrics';
 import './ToolPanel.css';
 
@@ -138,7 +139,7 @@ const blobUrlToBytes = async (url) => {
   }
 };
 
-const generateKMLString = (data, isKMZ = false) => {
+const generateKMLString = (data, exportMode = 'kml') => {
   let kml = `<?xml version="1.0" encoding="UTF-8"?>\n<kml xmlns="http://www.opengis.net/kml/2.2" xmlns:gx="http://www.google.com/kml/ext/2.2">\n  <Document>\n    <name>${data.id || 'Exported Project'}</name>\n`;
 
   if (data.polygons) {
@@ -214,7 +215,7 @@ const generateKMLString = (data, isKMZ = false) => {
       if (!pin.position) return;
       let styleStr = '';
       if (pin.styleMode === 'custom' && pin.imageDataUrl) {
-         const href = isKMZ ? `files/pin-${pin.id}.png` : pin.imageDataUrl;
+         const href = (exportMode === 'kmz') ? `files/pin-${pin.id}.png` : pin.imageDataUrl;
          styleStr = `
       <Style>
         <IconStyle>
@@ -278,11 +279,30 @@ const generateKMLString = (data, isKMZ = false) => {
     data.floorPlans.forEach((fp, i) => {
       if (!fp.bounds || !fp.corners) return;
       const name = `Floor Plan ${i+1}`;
-      const href = isKMZ ? `files/floorplan-${fp.id}.png` : fp.floorplan;
+      let href = fp.floorplan;
+      if (exportMode === 'kmz') href = `files/floorplan-${fp.id}.png`;
+      else if (exportMode === 'zip') href = `floorplan-${fp.id}.png`;
       
       const isDistorted = !!fp.distortedCorners;
       
-      if (isKMZ || isDistorted) {
+      if (exportMode === 'zip') {
+        // Baked image is perfectly axis-aligned and unrotated.
+        kml += `
+    <GroundOverlay>
+      <name>${name}</name>
+      <gx:drawOrder>0</gx:drawOrder>
+      <Icon>
+        <href>${href}</href>
+      </Icon>
+      <LatLonBox>
+        <north>${fp.bounds.ne.lat}</north>
+        <south>${fp.bounds.sw.lat}</south>
+        <east>${fp.bounds.ne.lng}</east>
+        <west>${fp.bounds.sw.lng}</west>
+        <rotation>0</rotation>
+      </LatLonBox>
+    </GroundOverlay>`;
+      } else if (exportMode === 'kmz' || isDistorted) {
         // Use LatLonQuad for KMZ or if it's explicitly distorted
         const targetCorners = fp.distortedCorners || fp.corners;
         const { sw, se, ne, nw } = targetCorners;
@@ -329,6 +349,9 @@ export default function ToolPanel() {
     snapToGrid, setSnapToGrid,
     closeSidePopups,
     getExportProject,
+    floorPlanManagerRef,
+    polygonManagerRef,
+    pinManagerRef
   } = useWorkspace();
   const [exportMenuOpen, setExportMenuOpen] = useState(false);
   const [saveDialogOpen, setSaveDialogOpen] = useState(false);
@@ -348,7 +371,7 @@ export default function ToolPanel() {
 
   const handleExportKML = () => {
     const data = getExportProject();
-    const kml = generateKMLString(data, false);
+    const kml = generateKMLString(data, 'kml');
     const blob = new Blob([kml], { type: "application/vnd.google-earth.kml+xml" });
     const url = URL.createObjectURL(blob);
     const a = document.createElement("a");
@@ -391,7 +414,7 @@ export default function ToolPanel() {
       }
     }
 
-    const kml = generateKMLString(data, true);
+    const kml = generateKMLString(data, 'kmz');
     zip.file("doc.kml", kml);
 
     try {
@@ -405,6 +428,250 @@ export default function ToolPanel() {
     } catch (e) {
       console.error("KMZ generation failed", e);
     }
+  };
+
+  const handleExportZIP = async () => {
+    setExportMenuOpen(false);
+    const data = getExportProject();
+    const zip = new JSZip();
+    const projectName = data.id || 'project';
+
+    if (data.floorPlans && data.floorPlans.length > 0) {
+      for (const fp of data.floorPlans) {
+        if (!fp.floorplan) continue;
+        
+        let img = floorPlanManagerRef.current?.overlays.get(fp.id)?.overlay?.imgEl;
+        
+        // If we couldn't get the already-loaded image, load it fresh
+        if (!img || !img.complete || img.naturalWidth === 0) {
+          img = await new Promise((resolve, reject) => {
+            const newImg = new Image();
+            newImg.crossOrigin = "anonymous";
+            newImg.onload = () => resolve(newImg);
+            newImg.onerror = () => {
+              console.error("Failed to load image for ZIP export", fp.floorplan);
+              resolve(null); // resolve null so we skip this file instead of crashing the export
+            };
+            newImg.src = fp.floorplan;
+          });
+        }
+        
+        if (img && img.naturalWidth > 0) {
+          const bakedBlob = await bakeFloorplanImage(img, fp);
+          if (bakedBlob) {
+            zip.file(`floorplan-${fp.id}.png`, bakedBlob);
+          }
+        }
+      }
+    }
+
+    const kml = generateKMLString(data, 'zip');
+    zip.file(`${projectName}.kml`, kml);
+
+    try {
+      const blob = await zip.generateAsync({ type: "blob" });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      a.href = url;
+      a.download = `${projectName}.zip`;
+      a.click();
+      URL.revokeObjectURL(url);
+    } catch (e) {
+      console.error("ZIP generation failed", e);
+    }
+  };
+
+  const handleImportKMZ = (e) => {
+    const file = e.target.files[0];
+    if (!file) return;
+
+    const reader = new FileReader();
+    reader.onload = async (ev) => {
+      try {
+        const zip = await JSZip.loadAsync(ev.target.result);
+        
+        let kmlFile = null;
+        zip.forEach((relativePath, zipEntry) => {
+          if (relativePath.toLowerCase().endsWith('.kml')) {
+            kmlFile = zipEntry;
+          }
+        });
+
+        if (!kmlFile) {
+          alert('No KML file found in KMZ.');
+          return;
+        }
+
+        const kmlText = await kmlFile.async('string');
+        const parser = new DOMParser();
+        const doc = parser.parseFromString(kmlText, 'text/xml');
+        
+        let minLat = 90, maxLat = -90, minLng = 180, maxLng = -180;
+        let hasBounds = false;
+        
+        const updateBounds = (lat, lng) => {
+          if (lat < minLat) minLat = lat;
+          if (lat > maxLat) maxLat = lat;
+          if (lng < minLng) minLng = lng;
+          if (lng > maxLng) maxLng = lng;
+          hasBounds = true;
+        };
+
+        const groundOverlays = doc.getElementsByTagName('GroundOverlay');
+        for (let i = 0; i < groundOverlays.length; i++) {
+          const go = groundOverlays[i];
+          const href = go.getElementsByTagName('href')[0]?.textContent;
+          let blobUrl = null;
+          
+          if (href) {
+             const imageFile = zip.file(href);
+             if (imageFile) {
+               const imgBlob = await imageFile.async('blob');
+               blobUrl = URL.createObjectURL(imgBlob);
+             }
+          }
+          
+          const latLonQuad = go.getElementsByTagName('gx:LatLonQuad')[0] || go.getElementsByTagName('LatLonQuad')[0];
+          const latLonBox = go.getElementsByTagName('LatLonBox')[0];
+          
+          let corners = null;
+          let distortedCorners = null;
+          let bounds = null;
+          let rotation = 0;
+          
+          if (latLonQuad) {
+            const coordsStr = latLonQuad.getElementsByTagName('coordinates')[0]?.textContent;
+            if (coordsStr) {
+               const pts = coordsStr.trim().split(/\s+/).map(p => {
+                 const [lng, lat] = p.split(',').map(Number);
+                 return { lat, lng };
+               });
+               if (pts.length >= 4) {
+                 distortedCorners = { sw: pts[0], se: pts[1], ne: pts[2], nw: pts[3] };
+                 corners = distortedCorners;
+                 
+                 let minLatQ = 90, maxLatQ = -90, minLngQ = 180, maxLngQ = -180;
+                 pts.forEach(pt => {
+                   updateBounds(pt.lat, pt.lng);
+                   if (pt.lat < minLatQ) minLatQ = pt.lat;
+                   if (pt.lat > maxLatQ) maxLatQ = pt.lat;
+                   if (pt.lng < minLngQ) minLngQ = pt.lng;
+                   if (pt.lng > maxLngQ) maxLngQ = pt.lng;
+                 });
+                 bounds = { ne: { lat: maxLatQ, lng: maxLngQ }, sw: { lat: minLatQ, lng: minLngQ } };
+               }
+            }
+          } else if (latLonBox) {
+            const n = parseFloat(latLonBox.getElementsByTagName('north')[0]?.textContent || 0);
+            const s = parseFloat(latLonBox.getElementsByTagName('south')[0]?.textContent || 0);
+            const e = parseFloat(latLonBox.getElementsByTagName('east')[0]?.textContent || 0);
+            const w = parseFloat(latLonBox.getElementsByTagName('west')[0]?.textContent || 0);
+            rotation = parseFloat(latLonBox.getElementsByTagName('rotation')[0]?.textContent || 0);
+            
+            bounds = { ne: { lat: n, lng: e }, sw: { lat: s, lng: w } };
+            corners = { sw: {lat: s, lng: w}, se: {lat: s, lng: e}, ne: {lat: n, lng: e}, nw: {lat: n, lng: w} };
+            updateBounds(n, e);
+            updateBounds(s, w);
+          }
+          
+          if (blobUrl && corners && floorPlanManagerRef.current) {
+            const id = 'fp-' + Date.now() + '-' + i;
+            floorPlanManagerRef.current.loadFloorPlan(id, {
+              id,
+              floorplan: blobUrl,
+              bounds,
+              corners,
+              distortedCorners,
+              rotation,
+              opacity: 1
+            });
+          }
+        }
+        
+        const placemarks = doc.getElementsByTagName('Placemark');
+        for (let i = 0; i < placemarks.length; i++) {
+          const pm = placemarks[i];
+          const name = pm.getElementsByTagName('name')[0]?.textContent || `Imported ${i}`;
+          
+          const polygon = pm.getElementsByTagName('Polygon')[0];
+          if (polygon) {
+            const coordsStr = polygon.getElementsByTagName('coordinates')[0]?.textContent;
+            if (coordsStr) {
+               const path = coordsStr.trim().split(/\s+/).filter(Boolean).map(p => {
+                 const [lng, lat] = p.split(',').map(Number);
+                 if (!isNaN(lat) && !isNaN(lng)) updateBounds(lat, lng);
+                 return { lat, lng };
+               }).filter(p => !isNaN(p.lat) && !isNaN(p.lng));
+               
+               if (path.length > 0) {
+                 const altMode = polygon.getElementsByTagName('altitudeMode')[0]?.textContent;
+                 const drawOrder = parseInt(polygon.getElementsByTagName('gx:drawOrder')[0]?.textContent || '1');
+                 let category = 'project';
+                 if (altMode === 'relativeToGround' && drawOrder === 2) category = 'landmark';
+                 else if (altMode === 'relativeToGround' && drawOrder === 3) category = 'unit';
+                 else if (altMode === 'relativeToGround' && drawOrder === 4) category = 'pending-unit';
+                 
+                 const id = 'poly-' + Date.now() + '-' + i;
+                 polygonManagerRef.current?.loadPolygon({
+                   id, name, category, path, color: '#ff6b6b'
+                 });
+               }
+            }
+          }
+          
+          const point = pm.getElementsByTagName('Point')[0];
+          if (point) {
+            const coordsStr = point.getElementsByTagName('coordinates')[0]?.textContent;
+            if (coordsStr) {
+               const [lng, lat] = coordsStr.trim().split(',').map(Number);
+               if (!isNaN(lat) && !isNaN(lng)) {
+                 updateBounds(lat, lng);
+                 
+                 let imageDataUrl = null;
+                 const href = pm.getElementsByTagName('href')[0]?.textContent;
+                 if (href) {
+                   const imageFile = zip.file(href);
+                   if (imageFile) {
+                     const imgBlob = await imageFile.async('blob');
+                     imageDataUrl = URL.createObjectURL(imgBlob);
+                   }
+                 }
+                 
+                 const id = 'pin-' + Date.now() + '-' + i;
+                 pinManagerRef.current?.loadPin({
+                   id, name, position: {lat, lng}, styleMode: imageDataUrl ? 'custom' : 'default', imageDataUrl
+                 });
+               }
+            }
+          }
+        }
+        
+        const map = polygonManagerRef.current?.map || floorPlanManagerRef.current?.map;
+        if (map && window.google?.maps) {
+          const lookAt = doc.getElementsByTagName('LookAt')[0];
+          const camera = doc.getElementsByTagName('Camera')[0];
+          const viewNode = lookAt || camera;
+          if (viewNode) {
+            const lat = parseFloat(viewNode.getElementsByTagName('latitude')[0]?.textContent || 0);
+            const lng = parseFloat(viewNode.getElementsByTagName('longitude')[0]?.textContent || 0);
+            map.panTo({lat, lng});
+          } else if (hasBounds) {
+            const bnd = new window.google.maps.LatLngBounds(
+              new window.google.maps.LatLng(minLat, minLng),
+              new window.google.maps.LatLng(maxLat, maxLng)
+            );
+            map.fitBounds(bnd);
+          }
+        }
+        
+      } catch (e) {
+        console.error("KMZ import failed", e);
+        alert("Failed to import KMZ");
+      }
+      
+      e.target.value = null;
+    };
+    reader.readAsArrayBuffer(file);
   };
 
   const handleExportProjectTagJSON = () => {
@@ -607,6 +874,7 @@ export default function ToolPanel() {
             <div className="tp-export-dropdown">
               <button className="tp-export-item" onClick={handleExportKML}>Export as KML</button>
               <button className="tp-export-item" onClick={handleExportKMZ}>Export as KMZ</button>
+              <button className="tp-export-item" onClick={handleExportZIP}>Export as ZIP</button>
               <button className="tp-export-item" onClick={handleExportJSON}>Export as JSON</button>
               <button className="tp-export-item" onClick={handleExportProjectTagJSON}>Export Project Tag JSON</button>
             </div>
@@ -626,11 +894,25 @@ export default function ToolPanel() {
           active={openDialogOpen}
           onClick={() => setOpenDialogOpen(true)}
         />
+        <ToolBtn
+          id="import-kmz"
+          label="Import KMZ"
+          Icon={FolderIcon}
+          onClick={() => document.getElementById('kmz-upload-input')?.click()}
+        />
       </div>
 
       {/* Modals */}
       {saveDialogOpen && <SaveProjectDialog onClose={() => setSaveDialogOpen(false)} />}
       {openDialogOpen && <OpenProjectDialog onClose={() => setOpenDialogOpen(false)} />}
+
+      <input 
+        type="file" 
+        id="kmz-upload-input" 
+        accept=".kmz" 
+        style={{ display: 'none' }} 
+        onChange={handleImportKMZ} 
+      />
     </div>
   );
 }
