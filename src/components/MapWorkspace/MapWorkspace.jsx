@@ -10,6 +10,7 @@ import FloorPlanManager from "../../lib/FloorPlanManager";
 import GCPSplitPanel from "../ToolPanel/GCPSplitPanel";
 import FloorPlanBottomPanel from "../ToolPanel/FloorPlanBottomPanel";
 import LayersPanel from "../LayersPanel/LayersPanel";
+import ColorPickerPopover from "../common/ColorPickerPopover";
 
 // ─── Constants ────────────────────────────────────────────────────────────────
 const MAP_CONTAINER_STYLE = { width: "100vw", height: "100vh" };
@@ -291,7 +292,7 @@ function MapWorkspaceInner() {
     polygonManagerRef,
     pinManagerRef,
     floorPlanManagerRef,
-    activeLayerId,
+    activeLayerId, setActiveLayerId,
     isAutoPlotReviewMode,
     confirmAutoPlotUnits,
     cancelAutoPlotUnits,
@@ -304,7 +305,9 @@ function MapWorkspaceInner() {
   const lastSelectedPinIdRef = useRef(null);
 
   const activeLayerIdRef = useRef(activeLayerId);
+  const selectedLayerItemIdRef = useRef(selectedLayerItemId);
   useEffect(() => { activeLayerIdRef.current = activeLayerId; }, [activeLayerId]);
+  useEffect(() => { selectedLayerItemIdRef.current = selectedLayerItemId; }, [selectedLayerItemId]);
 
   const activeLayerColor = project.layers?.find(l => l.id === activeLayerId)?.color || '#00CED1';
 
@@ -324,6 +327,21 @@ function MapWorkspaceInner() {
   const [pinIsEditing, setPinIsEditing] = useState(false);
   const [pinCoordsCopied, setPinCoordsCopied] = useState(false);
   const baseTool = activeTool?.includes('-') ? activeTool.split('-').slice(1).join('-') : activeTool;
+
+  const [sliderBeforeStates, setSliderBeforeStates] = useState({});
+
+  const handleSliderDown = (field) => {
+    if (selectedPolygonEntry) {
+      setSliderBeforeStates(prev => ({ ...prev, [field]: selectedPolygonEntry[field] }));
+    }
+  };
+
+  const handleSliderUp = (field, finalValue) => {
+    if (selectedPolygonEntry && polygonManagerRef.current) {
+      const before = sliderBeforeStates[field];
+      polygonManagerRef.current.commitStyleChange(selectedPolygonEntry.id, field, before, finalValue);
+    }
+  };
 
   // Tool-specific drawing properties (not stored in history)
   const [toolProps, setToolProps] = useState(DEFAULT_TOOL_PROPS);
@@ -493,17 +511,21 @@ function MapWorkspaceInner() {
             (c) => new window.google.maps.LatLng(c.lat, c.lng)
           );
           const polyId = `floorplan-boundary-${id}`;
+          const fp = floorPlanManagerRef.current?.getState().find(f => f.id === id);
+          const fpName = fp && fp.name ? `${fp.name} Boundary` : 'Floorplan Boundary';
+          
           if (pm.polygons.has(polyId)) {
             const entry = pm.polygons.get(polyId);
             entry.gPolygon.setPath(path);
+            entry.name = fpName;
             entry.gPolygon.setOptions({ zIndex: ++pm.zCounter }); // bring to front on re-lock
             pm.callbacks.onChange && pm.callbacks.onChange();
             return;
           }
-          pm.createPolygon(polyId, 'Floorplan Boundary', path, 'project', activeLayerIdRef.current, '#00ff00');
+          pm.createPolygon(polyId, fpName, path, 'project', activeLayerIdRef.current, '#00ff00', { floorPlanId: id });
           pushThunk({
             undo: () => pm.deletePolygon(polyId, true),
-            redo: () => pm.createPolygon(polyId, 'Floorplan Boundary', [...path], 'project', activeLayerIdRef.current, '#00ff00'),
+            redo: () => pm.createPolygon(polyId, fpName, [...path], 'project', activeLayerIdRef.current, '#00ff00', { floorPlanId: id }),
           });
         },
       });
@@ -541,9 +563,7 @@ function MapWorkspaceInner() {
   const clearPreview = useCallback(() => {
     if (previewLineRef.current) { previewLineRef.current.setMap(null); previewLineRef.current = null; }
     previewDotsRef.current.forEach((o) => o.setMap(null)); previewDotsRef.current = [];
-    previewCirclesRef.current.forEach((o) => o.setMap(null)); previewCirclesRef.current = [];
-  }, []);
-
+    previewCirclesRef.current.forEach((o) => o.setMap(null)); previewCirclesRef.current = [];  }, []);
   const cancelDrawing = useCallback(() => {
     inProgressRef.current = [];
     setInProgressPoints([]);
@@ -564,7 +584,10 @@ function MapWorkspaceInner() {
         return;
       }
       if (e.ctrlKey && !e.shiftKey && e.key === "z") { e.preventDefault(); undo(); return; }
-      if (e.ctrlKey && (e.key === "y" || (e.shiftKey && e.key === "Z"))) { e.preventDefault(); redo(); }
+      if (e.ctrlKey && (e.key === "y" || (e.shiftKey && e.key === "Z"))) { e.preventDefault(); redo(); return; }
+      if ((e.key === "Delete" || e.key === "Backspace") && polygonManagerRef.current) {
+        polygonManagerRef.current.handleDeleteKey(e);
+      }
     };
     window.addEventListener("keydown", handler);
     return () => window.removeEventListener("keydown", handler);
@@ -610,9 +633,35 @@ function MapWorkspaceInner() {
   // picks Landmark/Project — nothing is drawn as a real, selectable polygon
   // (and it never becomes editable) until "Done" is pressed.
   const beginNaming = useCallback((path) => {
-    const count = (polygonManagerRef.current?.polygons.size ?? 0) + 1;
-    setPendingName(isAutoPlotReviewMode ? `Unit ${count}` : `Boundary ${count}`);
-    setPendingCategory(isAutoPlotReviewMode ? 'pending-unit' : 'project');
+    let defaultCat = 'project';
+    if (isAutoPlotReviewMode) {
+      defaultCat = 'pending-unit';
+    } else {
+      const selectedItem = selectedLayerItemIdRef.current;
+      if (selectedItem) {
+        if (selectedItem === 'landmarks') {
+          defaultCat = 'landmark';
+        } else if (selectedItem.startsWith('plots-')) {
+          defaultCat = 'unit';
+        }
+      }
+    }
+    
+    const pm = polygonManagerRef.current;
+    let count = 1;
+    if (pm) {
+      const polys = Array.from(pm.polygons.values());
+      if (defaultCat === 'landmark') count = polys.filter(p => p.category === 'landmark').length + 1;
+      else if (defaultCat === 'unit' || defaultCat === 'pending-unit') count = polys.filter(p => p.category === 'unit' || p.category === 'pending-unit').length + 1;
+      else count = polys.filter(p => p.category !== 'landmark' && p.category !== 'unit' && p.category !== 'pending-unit').length + 1;
+    }
+    
+    let defaultName = `Boundary ${count}`;
+    if (defaultCat === 'landmark') defaultName = `Landmark ${count}`;
+    else if (defaultCat === 'unit' || defaultCat === 'pending-unit') defaultName = `Unit ${count}`;
+    
+    setPendingName(defaultName);
+    setPendingCategory(defaultCat);
     setPendingPolygon({ path });
     setActiveTool(null);
   }, [setActiveTool, polygonManagerRef, isAutoPlotReviewMode]);
@@ -624,15 +673,104 @@ function MapWorkspaceInner() {
     const pm = polygonManagerRef.current;
     if (!pendingPolygon || !pm) return;
     const id = nextId('poly');
-    const name = pendingName.trim() || `Boundary ${pm.polygons.size + 1}`;
     const category = pendingCategory;
+    
+    const polys = Array.from(pm.polygons.values());
+    let count = 1;
+    if (category === 'landmark') count = polys.filter(p => p.category === 'landmark').length + 1;
+    else if (category === 'unit' || category === 'pending-unit') count = polys.filter(p => p.category === 'unit' || p.category === 'pending-unit').length + 1;
+    else count = polys.filter(p => p.category !== 'landmark' && p.category !== 'unit' && p.category !== 'pending-unit').length + 1;
+    
+    let fallbackName = `Boundary ${count}`;
+    if (category === 'landmark') fallbackName = `Landmark ${count}`;
+    else if (category === 'unit' || category === 'pending-unit') fallbackName = `Unit ${count}`;
+    
+    const name = pendingName.trim() || fallbackName;
     const path = pendingPolygon.path;
-    const layerId = activeLayerIdRef.current;
+    
+    let targetLayerId = activeLayerIdRef.current;
+    let targetCategory = category;
+    let targetMetadata = {};
+
+    // Route based on selected folder/layer
+    const selectedItem = selectedLayerItemIdRef.current;
+    
+    let selectedFloorplanFolder = false;
+    let floorplanExists = false;
+
+    if (selectedItem) {
+      if (selectedItem.startsWith('folder-') || selectedItem.startsWith('plots-')) {
+        const fpId = selectedItem.replace(/^(folder|plots)-/, '');
+        const fp = floorPlanManagerRef.current?.getState().find(f => f.id === fpId);
+        if (fp) {
+          selectedFloorplanFolder = true;
+          floorplanExists = true;
+          targetLayerId = fp.layerId || targetLayerId;
+          targetMetadata = { floorPlanId: fpId };
+        }
+      } else if (selectedItem === 'landmarks') {
+        targetCategory = 'landmark';
+      } else if (selectedItem.startsWith('layer-')) {
+        targetLayerId = selectedItem;
+      }
+    }
+
+    let finalColor = activeLayerColor;
+    if (category === 'unit' || category === 'pending-unit') {
+      finalColor = '#ff6b6b';
+      
+      if (category === 'unit') {
+        if (selectedFloorplanFolder && floorplanExists) {
+          // targetMetadata already has floorPlanId from the routing block above,
+          // which will naturally nest it inside that floorplan's "Plots" folder.
+        } else {
+          // Add directly to the general Layer by ensuring no floorPlanId is attached.
+          delete targetMetadata.floorPlanId;
+        }
+      } else {
+        // Fallback for pending-unit to preserve old behavior
+        if (!targetMetadata.floorPlanId && selectedFloorPlanId) {
+          targetMetadata = { floorPlanId: selectedFloorPlanId };
+        }
+      }
+    } else if (category === 'pending-unit' && selectedFloorPlanId) {
+      // Keep legacy logic just in case
+      targetMetadata = { floorPlanId: selectedFloorPlanId };
+    }
+
+    // Uniform Style Override
+    let targetContainerId = null;
+    if (targetMetadata.floorPlanId) {
+      if (category === 'unit' || category === 'pending-unit') {
+        targetContainerId = `plots-${targetMetadata.floorPlanId}`;
+      } else {
+        targetContainerId = `folder-${targetMetadata.floorPlanId}`;
+      }
+    } else if (selectedItem && selectedItem.startsWith('layer-')) {
+      targetContainerId = selectedItem;
+    } else if (targetLayerId) {
+      targetContainerId = targetLayerId;
+    }
+
+    if (targetContainerId) {
+      if (targetContainerId.startsWith('plots-') || targetContainerId.startsWith('folder-')) {
+        const settings = project?.folderSettings?.[targetContainerId];
+        if (settings && settings.styleMode === 'uniform' && settings.color) {
+          finalColor = settings.color;
+        }
+      } else if (targetContainerId.startsWith('layer-')) {
+        const layer = project?.layers?.find(l => l.id === targetContainerId);
+        if (layer && layer.styleMode === 'uniform' && layer.color) {
+          finalColor = layer.color;
+        }
+      }
+    }
+
     try {
-      pm.createPolygon(id, name, path, category, layerId, activeLayerColor);
+      pm.createPolygon(id, name, path, targetCategory, targetLayerId, finalColor, targetMetadata);
       pm.callbacks.pushHistory && pm.callbacks.pushHistory({
         undo: () => pm.deletePolygon(id, true),
-        redo: () => pm.createPolygon(id, name, [...path], category, layerId, activeLayerColor),
+        redo: () => pm.createPolygon(id, name, [...path], targetCategory, targetLayerId, finalColor, targetMetadata),
       });
       pm.callbacks.onChange && pm.callbacks.onChange();
       pm.select(id); // selects the popup only — polygon stays non-editable
@@ -640,11 +778,34 @@ function MapWorkspaceInner() {
       console.error('Polygon create error:', err);
     }
     setPendingPolygon(null);
-  }, [pendingPolygon, pendingName, pendingCategory, polygonManagerRef]);
+  }, [pendingPolygon, pendingName, pendingCategory, polygonManagerRef, selectedFloorPlanId, project]);
 
   const cancelPendingPolygon = useCallback(() => {
     setPendingPolygon(null);
   }, []);
+
+  const handlePendingCategoryChange = useCallback((newCat) => {
+    const pm = polygonManagerRef.current;
+    let count = 1;
+    if (pm) {
+      const polys = Array.from(pm.polygons.values());
+      if (newCat === 'landmark') count = polys.filter(p => p.category === 'landmark').length + 1;
+      else if (newCat === 'unit' || newCat === 'pending-unit') count = polys.filter(p => p.category === 'unit' || p.category === 'pending-unit').length + 1;
+      else count = polys.filter(p => p.category !== 'landmark' && p.category !== 'unit' && p.category !== 'pending-unit').length + 1;
+    }
+    
+    const isUnchangedBoundary = /^Boundary \d+$/.test(pendingName);
+    const isUnchangedLandmark = /^Landmark \d+$/.test(pendingName);
+    const isUnchangedUnit = /^Unit \d+$/.test(pendingName);
+
+    if (isUnchangedBoundary || isUnchangedLandmark || isUnchangedUnit || pendingName.trim() === '') {
+      let nextName = `Boundary ${count}`;
+      if (newCat === 'landmark') nextName = `Landmark ${count}`;
+      else if (newCat === 'unit' || newCat === 'pending-unit') nextName = `Unit ${count}`;
+      setPendingName(nextName);
+    }
+    setPendingCategory(newCat);
+  }, [pendingName, polygonManagerRef]);
 
   // ── Wire map interaction per active tool ────────────────────────────────────
   useEffect(() => {
@@ -694,7 +855,47 @@ function MapWorkspaceInner() {
 
     // ── Pin ────────────────────────────────────────────────────────────────
     if (baseTool === "pin") {
-      pinManagerRef.current?.armPlacement(activeLayerColor, activeLayerIdRef.current);
+      let targetLayerId = activeLayerIdRef.current;
+      let targetMetadata = {};
+      const selectedItem = selectedLayerItemIdRef.current;
+      if (selectedItem) {
+        if (selectedItem.startsWith('folder-') || selectedItem.startsWith('plots-')) {
+          const fpId = selectedItem.replace(/^(folder|plots)-/, '');
+          const fp = floorPlanManagerRef.current?.getState().find(f => f.id === fpId);
+          if (fp) {
+            targetLayerId = fp.layerId || targetLayerId;
+            targetMetadata = { floorPlanId: fpId };
+          }
+        } else if (selectedItem.startsWith('layer-')) {
+          targetLayerId = selectedItem;
+        }
+      }
+      let finalColor = activeLayerColor;
+      let targetContainerId = null;
+
+      if (targetMetadata.floorPlanId) {
+        targetContainerId = `folder-${targetMetadata.floorPlanId}`;
+      } else if (selectedItem && selectedItem.startsWith('layer-')) {
+        targetContainerId = selectedItem;
+      } else if (targetLayerId) {
+        targetContainerId = targetLayerId;
+      }
+
+      if (targetContainerId) {
+        if (targetContainerId.startsWith('folder-')) {
+          const settings = project?.folderSettings?.[targetContainerId];
+          if (settings && settings.styleMode === 'uniform' && settings.color) {
+            finalColor = settings.color;
+          }
+        } else if (targetContainerId.startsWith('layer-')) {
+          const layer = project?.layers?.find(l => l.id === targetContainerId);
+          if (layer && layer.styleMode === 'uniform' && layer.color) {
+            finalColor = layer.color;
+          }
+        }
+      }
+
+      pinManagerRef.current?.armPlacement(finalColor, targetLayerId, targetMetadata);
     }
 
     // ── Polygon ────────────────────────────────────────────────────────────
@@ -970,29 +1171,35 @@ function MapWorkspaceInner() {
 
     if (polygonManagerRef.current) {
       polygonManagerRef.current.polygons.forEach(entry => {
-        const isVisible = layerVisibility[entry.layerId || 'layer-1'];
-        if (entry.gPolygon.getVisible() !== isVisible) {
-          entry.gPolygon.setVisible(isVisible);
+        const layerVisible = layerVisibility[entry.layerId || 'layer-1'];
+        const itemVisible = entry.itemVisible !== false;
+        const finalVisible = layerVisible && itemVisible;
+        if (entry.gPolygon.getVisible() !== finalVisible) {
+          entry.gPolygon.setVisible(finalVisible);
         }
       });
     }
 
     if (pinManagerRef.current) {
       pinManagerRef.current.pins.forEach(entry => {
-        const isVisible = layerVisibility[entry.layerId || 'layer-1'];
-        if (entry.marker.getVisible() !== isVisible) {
-          entry.marker.setVisible(isVisible);
+        const layerVisible = layerVisibility[entry.layerId || 'layer-1'];
+        const itemVisible = entry.itemVisible !== false;
+        const finalVisible = layerVisible && itemVisible;
+        if (entry.marker.getVisible() !== finalVisible) {
+          entry.marker.setVisible(finalVisible);
         }
       });
     }
 
     if (floorPlanManagerRef.current) {
       floorPlanManagerRef.current.overlays.forEach(entry => {
-        const isVisible = layerVisibility[entry.layerId || 'layer-1'];
+        const layerVisible = layerVisibility[entry.layerId || 'layer-1'];
+        const itemVisible = entry.itemVisible !== false;
+        const finalVisible = layerVisible && itemVisible;
         const currentMap = entry.overlay.getMap();
-        if (isVisible && !currentMap) {
+        if (finalVisible && !currentMap) {
           entry.overlay.setMap(mapRef.current);
-        } else if (!isVisible && currentMap) {
+        } else if (!finalVisible && currentMap) {
           entry.overlay.setMap(null);
         }
       });
@@ -1065,7 +1272,7 @@ function MapWorkspaceInner() {
     }
 
     return () => { clearPreview(); };
-  }, [mapReady, inProgressPoints, radiusCenter, radiusRings, clearPreview]);
+  }, [mapReady, inProgressPoints, radiusCenter, radiusRings, clearPreview, activeTool]);
 
   // ── Handle pin image upload ─────────────────────────────────────────────────
   const handlePinImageFile = useCallback((e, pinId) => {
@@ -1089,8 +1296,14 @@ function MapWorkspaceInner() {
     const center = floorClickRef.current ?? mapRef.current?.getCenter()?.toJSON() ?? DEFAULT_CENTER;
 
     const id = nextId("fp");
+    
+    let name = "Floor Plan";
+    if (file.name) {
+      name = file.name.replace(/\.[^/.]+$/, "");
+    }
+
     // Native pixel scale is defaulted to 1 map-meter per pixel.
-    floorPlanManagerRef.current?.addFloorPlan(id, url, center, 1, 0, 1, null, activeLayerIdRef.current).then(() => {
+    floorPlanManagerRef.current?.addFloorPlan(id, url, center, 1, 0, 1, null, activeLayerIdRef.current, null, name).then(() => {
       setSelectedFloorPlanId(id);
       setActiveTool(null);
     });
@@ -1141,7 +1354,7 @@ function MapWorkspaceInner() {
                   <div className="pp-cats">
                     <button
                       type="button"
-                      className={`pp-cat${selectedPolygonEntry.category !== 'landmark' ? ' pp-cat--active' : ''}`}
+                      className={`pp-cat${selectedPolygonEntry.category === 'project' ? ' pp-cat--active' : ''}`}
                       onClick={() => polygonManagerRef.current?.setCategory(selectedPolygonEntry.id, 'project')}
                     >
                       Project
@@ -1153,6 +1366,61 @@ function MapWorkspaceInner() {
                     >
                       Landmark
                     </button>
+                    <button
+                      type="button"
+                      className={`pp-cat${selectedPolygonEntry.category === 'unit' ? ' pp-cat--active' : ''}`}
+                      onClick={() => polygonManagerRef.current?.setCategory(selectedPolygonEntry.id, 'unit')}
+                    >
+                      Unit
+                    </button>
+                  </div>
+                </div>
+                
+                <div style={{ display: 'flex', flexDirection: 'column', gap: '8px', width: '100%', marginTop: '8px', marginBottom: '8px' }}>
+                  <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                    <span style={{ fontSize: '13px', color: '#94a3b8' }}>Color</span>
+                    <ColorPickerPopover
+                      color={selectedPolygonEntry.color}
+                      onChange={(c) => polygonManagerRef.current?.setColor(selectedPolygonEntry.id, c)}
+                    />
+                  </div>
+                  <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                    <span style={{ fontSize: '13px', color: '#94a3b8' }}>Fill Opacity</span>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                      <input
+                        type="range"
+                        min="0"
+                        max="1"
+                        step="0.01"
+                        value={selectedPolygonEntry.fillOpacity ?? 0.12}
+                        onPointerDown={() => handleSliderDown('fillOpacity')}
+                        onPointerUp={(e) => handleSliderUp('fillOpacity', parseFloat(e.target.value))}
+                        onChange={(e) => polygonManagerRef.current?.setStyleField(selectedPolygonEntry.id, 'fillOpacity', parseFloat(e.target.value))}
+                        style={{ width: 80 }}
+                      />
+                      <span style={{ fontSize: '12px', color: '#fff', width: '24px' }}>
+                        {Math.round((selectedPolygonEntry.fillOpacity ?? 0.12) * 100)}%
+                      </span>
+                    </div>
+                  </div>
+                  <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                    <span style={{ fontSize: '13px', color: '#94a3b8' }}>Border Width</span>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                      <input
+                        type="range"
+                        min="1"
+                        max="10"
+                        step="1"
+                        value={selectedPolygonEntry.strokeWeight ?? 2}
+                        onPointerDown={() => handleSliderDown('strokeWeight')}
+                        onPointerUp={(e) => handleSliderUp('strokeWeight', parseInt(e.target.value))}
+                        onChange={(e) => polygonManagerRef.current?.setStyleField(selectedPolygonEntry.id, 'strokeWeight', parseInt(e.target.value))}
+                        style={{ width: 80 }}
+                      />
+                      <span style={{ fontSize: '12px', color: '#fff', width: '24px' }}>
+                        {selectedPolygonEntry.strokeWeight ?? 2}px
+                      </span>
+                    </div>
                   </div>
                 </div>
                 {polygonMetricsNow && (
@@ -1244,11 +1512,9 @@ function MapWorkspaceInner() {
                   <div style={{ display: 'flex', flexDirection: 'column', gap: '8px', width: '100%' }}>
                     <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
                       <span>Color</span>
-                      <input
-                        type="color"
-                        value={selectedPinEntry.color}
-                        onChange={(e) => pinManagerRef.current?.setColor(selectedPinEntry.id, e.target.value)}
-                        style={{ width: 32, height: 22, border: "none", background: "none", padding: 0, cursor: "pointer" }}
+                      <ColorPickerPopover
+                        color={selectedPinEntry.color}
+                        onChange={(c) => pinManagerRef.current?.setColor(selectedPinEntry.id, c)}
                       />
                     </div>
                     {selectedPinEntry.styleMode === 'custom' && (
@@ -1386,26 +1652,24 @@ function MapWorkspaceInner() {
               <button
                 type="button"
                 className={`pp-cat${pendingCategory === 'project' ? ' pp-cat--active' : ''}`}
-                onClick={() => setPendingCategory('project')}
+                onClick={() => handlePendingCategoryChange('project')}
               >
                 Project
               </button>
               <button
                 type="button"
                 className={`pp-cat${pendingCategory === 'landmark' ? ' pp-cat--active' : ''}`}
-                onClick={() => setPendingCategory('landmark')}
+                onClick={() => handlePendingCategoryChange('landmark')}
               >
                 Landmark
               </button>
-              {isAutoPlotReviewMode && (
-                <button
-                  type="button"
-                  className={`pp-cat${pendingCategory === 'pending-unit' ? ' pp-cat--active' : ''}`}
-                  onClick={() => setPendingCategory('pending-unit')}
-                >
-                  Unit
-                </button>
-              )}
+              <button
+                type="button"
+                className={`pp-cat${(pendingCategory === 'pending-unit' || pendingCategory === 'unit') ? ' pp-cat--active' : ''}`}
+                onClick={() => handlePendingCategoryChange(isAutoPlotReviewMode ? 'pending-unit' : 'unit')}
+              >
+                Unit
+              </button>
             </div>
             <div className="poly-popup-actions poly-modal-actions">
               <button className="poly-popup-btn" onClick={cancelPendingPolygon}>Cancel</button>
@@ -1435,8 +1699,7 @@ function MapWorkspaceInner() {
             <button onClick={cancelAutoPlotUnits} style={{
               background: 'transparent', border: '1px solid rgba(255,255,255,0.2)', color: 'white',
               padding: '8px 16px', borderRadius: '6px', cursor: 'pointer', fontSize: '14px', fontWeight: 500
-            }}>Cancel</button>
-            <button onClick={confirmAutoPlotUnits} style={{
+            }}>Cancel</button>            <button onClick={confirmAutoPlotUnits} style={{
               background: '#00d4ff', border: 'none', color: '#0f172a',
               padding: '8px 16px', borderRadius: '6px', cursor: 'pointer', fontSize: '14px', fontWeight: 600
             }}>Confirm Units</button>

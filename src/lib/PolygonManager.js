@@ -17,6 +17,7 @@ export default class PolygonManager {
     this.zCounter = 0;
     this.selectedId = null;
     this.isEditing = false;
+    this.hoveredVertexIndex = null;
   }
 
   getBaseZIndex(category) {
@@ -28,29 +29,34 @@ export default class PolygonManager {
   }
 
   // ---------------------------------------------------------------- lifecycle
-  createPolygon(id, name, path, category = 'project', layerId = 'layer-1', color = null, metadata = {}) {
+  createPolygon(id, name, path, category = 'project', layerId = 'layer-1', color = null, metadata = {}, entryData = {}) {
     let defaultColor = '#00d4ff';
-    if (category === 'landmark') defaultColor = '#a855f7';
-    else if (category === 'unit') defaultColor = '#ff6b6b';
-    else if (category === 'pending-unit') defaultColor = '#ff9800';
+    if (category === 'unit' || category === 'pending-unit') defaultColor = '#ff6b6b';
+    else if (category === 'landmark') defaultColor = '#00CED1';
 
     const finalColor = color || defaultColor;
     const gPolygon = new window.google.maps.Polygon({
       map: this.map,
       paths: path,
       strokeColor: finalColor,
-      strokeWeight: 2,
+      strokeWeight: entryData.strokeWeight ?? 2,
       fillColor: finalColor,
-      fillOpacity: 0.12,
+      fillOpacity: entryData.fillOpacity ?? 0.12,
+      strokePosition: window.google.maps.StrokePosition.INSIDE,
       editable: false,
       clickable: true,
       zIndex: this.getBaseZIndex(category) + (++this.zCounter),
     });
-    const entry = { id, name, category, layerId, color: finalColor, gPolygon, metadata };
+    const entry = { id, name, category, layerId, color: finalColor, fillOpacity: entryData.fillOpacity ?? 0.12, strokeWeight: entryData.strokeWeight ?? 2, gPolygon, metadata, itemVisible: entryData.visible !== false };
     this.polygons.set(id, entry);
 
     let pathSnapshotBefore = null;
     const pathObj = gPolygon.getPath();
+    
+    entry.takeSnapshot = () => {
+      pathSnapshotBefore = pathObj.getArray().map((ll) => ({ lat: ll.lat(), lng: ll.lng() }));
+    };
+
     const captureChange = () => {
       const before = pathSnapshotBefore;
       const after = pathObj.getArray().map((ll) => ({ lat: ll.lat(), lng: ll.lng() }));
@@ -69,7 +75,7 @@ export default class PolygonManager {
       pathObj.addListener(evtName, () => captureChange());
     });
     gPolygon.addListener('mousedown', () => {
-      pathSnapshotBefore = pathObj.getArray().map((ll) => ({ lat: ll.lat(), lng: ll.lng() }));
+      entry.takeSnapshot();
     });
 
     // Clicking an already-placed (non-editable) polygon re-selects it and
@@ -85,17 +91,46 @@ export default class PolygonManager {
       this.select(id, e.latLng ? e.latLng.toJSON() : null);
     });
 
+    const trackHover = (e) => {
+      if (!this.isEditing || this.selectedId !== id) return;
+      const path = gPolygon.getPath();
+      let minDist = Infinity;
+      let closestIdx = null;
+
+      if (e.latLng && window.google?.maps?.geometry?.spherical) {
+        const zoom = this.map.getZoom();
+        const lat = e.latLng.lat();
+        // Meters per pixel at current latitude and zoom
+        const metersPerPx = (156543.03392 * Math.cos((lat * Math.PI) / 180)) / Math.pow(2, zoom);
+        // We want a threshold of ~25 pixels
+        const thresholdMeters = 25 * metersPerPx;
+
+        path.forEach((latLng, i) => {
+          const distMeters = window.google.maps.geometry.spherical.computeDistanceBetween(e.latLng, latLng);
+          if (distMeters < thresholdMeters && distMeters < minDist) {
+            minDist = distMeters;
+            closestIdx = i;
+          }
+        });
+      }
+      this.hoveredVertexIndex = closestIdx;
+    };
+
     gPolygon.addListener('mousemove', (e) => {
       if (this.callbacks.getActiveTool && this.callbacks.getActiveTool() !== null) {
         window.google.maps.event.trigger(this.map, 'mousemove', e);
       }
+      trackHover(e);
     });
+
+    this.map.addListener('mousemove', trackHover);
+
     return entry;
   }
 
   loadPolygon(data) {
     const path = data.path.map((p) => new window.google.maps.LatLng(p.lat, p.lng));
-    this.createPolygon(data.id, data.name, path, data.category || 'project', data.layerId || 'layer-1', data.color);
+    this.createPolygon(data.id, data.name, path, data.category || 'project', data.layerId || 'layer-1', data.color, data.metadata || {}, { fillOpacity: data.fillOpacity, strokeWeight: data.strokeWeight, visible: data.visible });
   }
 
   // Bulk-restore from a saved project payload (replaces current polygons)
@@ -140,7 +175,28 @@ export default class PolygonManager {
       }
     }
     this.isEditing = false;
+    this.hoveredVertexIndex = null;
     this.callbacks.onEditToggle && this.callbacks.onEditToggle(null, false);
+  }
+
+  handleDeleteKey(e) {
+    if (!this.isEditing || this.hoveredVertexIndex === null) return;
+    if (e.target.tagName === 'INPUT' || e.target.tagName === 'TEXTAREA') return;
+
+    const entry = this.polygons.get(this.selectedId);
+    if (!entry) return;
+
+    const path = entry.gPolygon.getPath();
+    if (path.getLength() <= 3) {
+      alert('A polygon must have at least 3 vertices.');
+      return;
+    }
+
+    // Take snapshot manually before keyboard deletion so undo/redo has the correct 'before' state
+    if (entry.takeSnapshot) entry.takeSnapshot();
+
+    path.removeAt(this.hoveredVertexIndex);
+    this.hoveredVertexIndex = null; // reset after delete
   }
 
   rename(id, name) {
@@ -171,33 +227,46 @@ export default class PolygonManager {
   setCategory(id, category) {
     const entry = this.polygons.get(id);
     if (!entry) return;
-    const before = entry.category;
+    const beforeCat = entry.category;
+    const beforeName = entry.name;
+    const beforeColor = entry.color;
     entry.category = category;
 
-    const applyColor = (cat) => {
-      let color = '#00d4ff';
-      if (cat === 'landmark') color = '#a855f7';
-      else if (cat === 'unit') color = '#ff6b6b';
-      else if (cat === 'pending-unit') color = '#ff9800';
+    const applyColorAndName = (cat, name, colorOverride) => {
+      let color = colorOverride;
+      if (!color) {
+        color = '#00d4ff';
+        if (cat === 'landmark') color = '#00CED1';
+        else if (cat === 'unit' || cat === 'pending-unit') color = '#ff6b6b';
+      }
       const baseZ = this.getBaseZIndex(cat);
       entry.gPolygon.setOptions({ 
         strokeColor: color, 
         fillColor: color,
         zIndex: baseZ + (++this.zCounter)
       });
+      entry.color = color;
+      entry.name = name;
     };
-    applyColor(category);
+
+    let newName = beforeName;
+    if (category === 'unit' && beforeCat !== 'unit') {
+      const unitCount = Array.from(this.polygons.values()).filter(p => p.category === 'unit' || p.category === 'pending-unit').length;
+      newName = `Unit ${unitCount + 1}`;
+    }
+
+    applyColorAndName(category, newName, null);
 
     this.callbacks.pushHistory && this.callbacks.pushHistory({
       undo: () => {
-        entry.category = before;
-        applyColor(before);
+        entry.category = beforeCat;
+        applyColorAndName(beforeCat, beforeName, beforeColor);
         this.callbacks.onChange && this.callbacks.onChange();
         if (this.selectedId === id) this.callbacks.onSelect && this.callbacks.onSelect({ ...entry });
       },
       redo: () => {
         entry.category = category;
-        applyColor(category);
+        applyColorAndName(category, newName, null);
         this.callbacks.onChange && this.callbacks.onChange();
         if (this.selectedId === id) this.callbacks.onSelect && this.callbacks.onSelect({ ...entry });
       },
@@ -217,12 +286,82 @@ export default class PolygonManager {
       undo: () => {
         entry.color = before;
         entry.gPolygon.setOptions({ strokeColor: before, fillColor: before });
+        if (this.selectedId === id) this.callbacks.onSelect && this.callbacks.onSelect({ ...entry });
+        this.callbacks.onChange && this.callbacks.onChange();
+      },
+      redo: () => this.setColor(id, color)
+    });
+    if (this.selectedId === id) this.callbacks.onSelect && this.callbacks.onSelect({ ...entry });
+    this.callbacks.onChange && this.callbacks.onChange();
+  }
+
+  setUniformColor(id, color) {
+    const entry = this.polygons.get(id);
+    if (!entry) return;
+    if (!entry.originalColor) entry.originalColor = entry.color;
+    entry.color = color;
+    entry.gPolygon.setOptions({ strokeColor: color, fillColor: color });
+    this.callbacks.onChange && this.callbacks.onChange();
+    if (this.selectedId === id) this.callbacks.onSelect && this.callbacks.onSelect({ ...entry });
+  }
+
+  restoreOriginalColor(id) {
+    const entry = this.polygons.get(id);
+    if (!entry || !entry.originalColor) return;
+    entry.color = entry.originalColor;
+    entry.gPolygon.setOptions({ strokeColor: entry.color, fillColor: entry.color });
+    entry.originalColor = null;
+    this.callbacks.onChange && this.callbacks.onChange();
+    if (this.selectedId === id) this.callbacks.onSelect && this.callbacks.onSelect({ ...entry });
+  }
+
+  setStyleField(id, field, value) {
+    const entry = this.polygons.get(id);
+    if (!entry) return;
+    entry[field] = value;
+    if (field === 'fillOpacity') {
+      entry.gPolygon.setOptions({ fillOpacity: value });
+    } else if (field === 'strokeWeight') {
+      entry.gPolygon.setOptions({ strokeWeight: value });
+    }
+    this.callbacks.onChange && this.callbacks.onChange();
+    if (this.selectedId === id) this.callbacks.onSelect && this.callbacks.onSelect({ ...entry });
+  }
+
+  commitStyleChange(id, field, before, after) {
+    const entry = this.polygons.get(id);
+    if (!entry) return;
+    this.callbacks.pushHistory && this.callbacks.pushHistory({
+      undo: () => {
+        this.setStyleField(id, field, before);
+      },
+      redo: () => {
+        this.setStyleField(id, field, after);
+      }
+    });
+  }
+
+  toggleVisibility(id) {
+    const entry = this.polygons.get(id);
+    if (!entry) return;
+    entry.itemVisible = entry.itemVisible === false ? true : false;
+    this.callbacks.onChange && this.callbacks.onChange();
+  }
+
+  setMetadata(id, key, value) {
+    const entry = this.polygons.get(id);
+    if (!entry) return;
+    const before = entry.metadata[key];
+    entry.metadata[key] = value;
+
+    this.callbacks.pushHistory && this.callbacks.pushHistory({
+      undo: () => {
+        entry.metadata[key] = before;
         this.callbacks.onChange && this.callbacks.onChange();
         if (this.selectedId === id) this.callbacks.onSelect && this.callbacks.onSelect({ ...entry });
       },
       redo: () => {
-        entry.color = color;
-        entry.gPolygon.setOptions({ strokeColor: color, fillColor: color });
+        entry.metadata[key] = value;
         this.callbacks.onChange && this.callbacks.onChange();
         if (this.selectedId === id) this.callbacks.onSelect && this.callbacks.onSelect({ ...entry });
       },
@@ -253,7 +392,7 @@ export default class PolygonManager {
       this.callbacks.pushHistory && this.callbacks.pushHistory({
         undo: () => { 
            // 1. restore the deleted polygon
-           this.loadPolygon({ id, name, category, path, layerId: entry.layerId, color: entry.color });
+           this.loadPolygon({ id, name, category, path, layerId: entry.layerId, color: entry.color, fillOpacity: entry.fillOpacity, strokeWeight: entry.strokeWeight, metadata: entry.metadata });
            
 
            // 3. restore original Map insertion order
@@ -315,7 +454,11 @@ export default class PolygonManager {
       category: entry.category || 'project',
       layerId: entry.layerId || 'layer-1',
       color: entry.color,
+      fillOpacity: entry.fillOpacity,
+      strokeWeight: entry.strokeWeight,
       path: entry.gPolygon.getPath().getArray().map((ll) => ({ lat: ll.lat(), lng: ll.lng() })),
+      metadata: entry.metadata || {},
+      visible: entry.itemVisible !== false
     }));
   }
 

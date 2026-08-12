@@ -343,7 +343,7 @@ const generateKMLString = (data, exportMode = 'kml') => {
 };
 
 export default function ToolPanel() {
-  const {
+const {
     activeProjectTool, setActiveProjectTool,
     activeLandmarkTool, setActiveLandmarkTool,
     snapToGrid, setSnapToGrid,
@@ -533,7 +533,6 @@ export default function ToolPanel() {
           
           const latLonQuad = go.getElementsByTagName('gx:LatLonQuad')[0] || go.getElementsByTagName('LatLonQuad')[0];
           const latLonBox = go.getElementsByTagName('LatLonBox')[0];
-          
           let corners = null;
           let distortedCorners = null;
           let bounds = null;
@@ -740,7 +739,8 @@ export default function ToolPanel() {
         length: lengthStr,
         width: widthStr,
         status: "AVAILABLE",
-        orientation: ""
+        orientation: "",
+        floorplanId: p.metadata?.floorPlanId || null
       };
     });
 

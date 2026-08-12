@@ -81,6 +81,12 @@
   align-items: center;
   height: 36px;
   gap: 6px;
+  border-radius: 6px;
+}
+
+.lp-layer-row--active {
+  background: rgba(0, 206, 209, 0.15) !important;
+  border: 1px solid rgba(0, 206, 209, 0.3) !important;
 }
 
 .lp-drag-handle {
@@ -329,4 +335,31 @@
 .lp-child-edit-btn:hover {
   color: rgba(255, 255, 255, 0.9);
   background: rgba(255, 255, 255, 0.1);
+}
+.lp-style-btn {
+  background: transparent;
+  border: none;
+  color: rgba(255, 255, 255, 0.4);
+  cursor: pointer;
+  padding: 4px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 4px;
+}
+.lp-style-btn:hover {
+  color: rgba(255, 255, 255, 0.9);
+  background: rgba(255, 255, 255, 0.1);
+}
+.lp-style-dropdown {
+  position: absolute;
+  top: 100%;
+  right: 0;
+  background: #1e293b;
+  border: 1px solid #334155;
+  border-radius: 4px;
+  padding: 4px;
+  min-width: 120px;
+  z-index: 100;
+  box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.1), 0 2px 4px -1px rgba(0, 0, 0, 0.06);
 }

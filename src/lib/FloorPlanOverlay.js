@@ -136,13 +136,24 @@ export function createFloorPlanOverlayClass() {
         const handles = this.eventDiv.querySelectorAll('.fp-handle');
         handles.forEach(handle => {
           const cls = handle.dataset.cls;
-          if (this.mode === 'distort' && ['nw', 'ne', 'se', 'sw'].includes(cls)) {
+          const isDistortCorner = ['nw', 'ne', 'se', 'sw'].includes(cls);
+          if ((this.mode === 'distort' && isDistortCorner) ||
+              (this.mode === 'manual' && (isDistortCorner || cls === 'center'))) {
             handle.style.display = 'block';
-            const pt = dst[['nw', 'ne', 'se', 'sw'].indexOf(cls)];
-            handle.style.left = (pt.x - 6) + 'px';
-            handle.style.top = (pt.y - 6) + 'px';
-            handle.style.right = '';
-            handle.style.bottom = '';
+            if (cls === 'center') {
+               const cx = (dst[0].x + dst[1].x + dst[2].x + dst[3].x) / 4;
+               const cy = (dst[0].y + dst[1].y + dst[2].y + dst[3].y) / 4;
+               handle.style.left = (cx - 6) + 'px';
+               handle.style.top = (cy - 6) + 'px';
+               handle.style.right = '';
+               handle.style.bottom = '';
+            } else {
+               const pt = dst[['nw', 'ne', 'se', 'sw'].indexOf(cls)];
+               handle.style.left = (pt.x - 6) + 'px';
+               handle.style.top = (pt.y - 6) + 'px';
+               handle.style.right = '';
+               handle.style.bottom = '';
+            }
           } else {
             handle.style.display = 'none';
           }
@@ -282,7 +293,7 @@ export function createFloorPlanOverlayClass() {
       const map = this.getMap();
       const proj = this.getProjection();
 
-      if (this.mode === 'distort' && ['nw', 'ne', 'se', 'sw'].includes(handleClass)) {
+      if (this.distortedCorners && ['nw', 'ne', 'se', 'sw'].includes(handleClass)) {
         const cornerLatLng = this.distortedCorners[handleClass];
         const cornerPx = proj.fromLatLngToDivPixel(new window.google.maps.LatLng(cornerLatLng.lat, cornerLatLng.lng));
         this.interactState = {
@@ -291,6 +302,28 @@ export function createFloorPlanOverlayClass() {
           startX: clientX,
           startY: clientY,
           origCornerPx: cornerPx,
+          origDistortedCorners: { ...this.distortedCorners }
+        };
+        map.setOptions({ draggable: false, gestureHandling: "none", scrollwheel: false, disableDoubleClickZoom: true });
+        document.addEventListener('mousemove', this.onInteractMove);
+        document.addEventListener('mouseup', this.onInteractEnd);
+        document.addEventListener('touchmove', this.onInteractMove, { passive: false });
+        document.addEventListener('touchend', this.onInteractEnd);
+        this.manager.onSelect(this.id);
+        return;
+      }
+
+      if (this.distortedCorners && handleClass === 'center') {
+        const cornersPx = {};
+        for (const cls of ['nw', 'ne', 'se', 'sw']) {
+           const latlng = this.distortedCorners[cls];
+           cornersPx[cls] = proj.fromLatLngToDivPixel(new window.google.maps.LatLng(latlng.lat, latlng.lng));
+        }
+        this.interactState = {
+          type: 'distort-drag',
+          startX: clientX,
+          startY: clientY,
+          origCornersPx: cornersPx,
           origDistortedCorners: { ...this.distortedCorners }
         };
         map.setOptions({ draggable: false, gestureHandling: "none", scrollwheel: false, disableDoubleClickZoom: true });
@@ -380,6 +413,16 @@ export function createFloorPlanOverlayClass() {
           ...this.distortedCorners,
           [this.interactState.handle]: { lat: newCornerLatLng.lat(), lng: newCornerLatLng.lng() }
         };
+      } else if (this.interactState.type === 'distort-drag') {
+        const proj = this.getProjection();
+        const newCorners = {};
+        for (const cls of ['nw', 'ne', 'se', 'sw']) {
+           const origPx = this.interactState.origCornersPx[cls];
+           const newPx = new window.google.maps.Point(origPx.x + dx, origPx.y + dy);
+           const newLatLng = proj.fromDivPixelToLatLng(newPx);
+           newCorners[cls] = { lat: newLatLng.lat(), lng: newLatLng.lng() };
+        }
+        this.distortedCorners = newCorners;
       } else if (this.interactState.type === 'drag') {
         const proj = this.getProjection();
         const newCenterPx = new window.google.maps.Point(this.interactState.origCenterPx.x + dx, this.interactState.origCenterPx.y + dy);

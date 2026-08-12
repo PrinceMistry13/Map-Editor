@@ -20,7 +20,7 @@ export default class FloorPlanManager {
   }
 
   // Preloads the image to get natural dimensions
-  async addFloorPlan(id, url, center, scale = 1, rotationDeg = 0, opacity = 1, timestamp = null, layerId = 'layer-1', distortedCorners = null) {
+  async addFloorPlan(id, url, center, scale = 1, rotationDeg = 0, opacity = 1, timestamp = null, layerId = 'layer-1', distortedCorners = null, name = 'Floor Plan') {
     return new Promise((resolve, reject) => {
       const img = new Image();
       img.crossOrigin = 'anonymous';
@@ -43,7 +43,7 @@ export default class FloorPlanManager {
         });
 
         this.overlays.set(id, {
-          id, url, scale, originalWidth: img.naturalWidth, originalHeight: img.naturalHeight, overlay, timestamp, layerId, imgEl: img
+          id, name, url, scale, originalWidth: img.naturalWidth, originalHeight: img.naturalHeight, overlay, timestamp, layerId, imgEl: img, itemVisible: true
         });
 
         this.callbacks.onChange && this.callbacks.onChange();
@@ -59,7 +59,12 @@ export default class FloorPlanManager {
       lat: (data.bounds.sw.lat + data.bounds.ne.lat) / 2,
       lng: (data.bounds.sw.lng + data.bounds.ne.lng) / 2
     };
-    this.addFloorPlan(id, data.floorplan, center, data.scale, data.rotation, data.opacity, data.timestamp, data.layerId || 'layer-1', data.distortedCorners || null);
+    this.addFloorPlan(id, data.floorplan, center, data.scale, data.rotation, data.opacity, data.timestamp, data.layerId || 'layer-1', data.distortedCorners || null, data.name || 'Floor Plan').then(() => {
+      if (data.visible === false) {
+        const entry = this.overlays.get(id);
+        if (entry) entry.itemVisible = false;
+      }
+    });
   }
 
   // Generate the axis-aligned bounding box from the rotated corners
@@ -278,6 +283,83 @@ export default class FloorPlanManager {
     });
   }
 
+  // Inverse of pointToLatLng
+  latLngToPoint(overlay, lat, lng) {
+    const { center, rotationDeg } = overlay;
+    const R = 6378137;
+    const cx = (center.lng * Math.PI * R) / 180;
+    const cy = R * Math.log(Math.tan(Math.PI / 4 + (center.lat * Math.PI) / 360));
+
+    const rx = (lng * Math.PI * R) / 180;
+    const ry = R * Math.log(Math.tan((lat * Math.PI) / 180 / 2 + Math.PI / 4));
+
+    const rad = (rotationDeg * Math.PI) / 180;
+    const cos = Math.cos(rad);
+    const sin = Math.sin(rad);
+
+    // We have:
+    // rx = cx + dx*cos + dy*sin
+    // ry = cy - dx*sin + dy*cos
+    // Let ux = rx - cx, uy = ry - cy
+    // ux = dx*cos + dy*sin
+    // uy = -dx*sin + dy*cos
+    // Multiply by rotation matrix inverse:
+    // dx = ux*cos - uy*sin
+    // dy = ux*sin + uy*cos
+
+    const ux = rx - cx;
+    const uy = ry - cy;
+
+    const dx = ux * cos - uy * sin;
+    const dy = ux * sin + uy * cos;
+
+    return { dx, dy };
+  }
+
+  // Generalized lat/lng to pixel projection
+  projectLatLngsToPixels(id, latLngs, W, H) {
+    const entry = this.overlays.get(id);
+    if (!entry) return null;
+    const { overlay } = entry;
+
+    const scaleX = overlay.widthMeters / W;
+    const scaleY = overlay.heightMeters / H;
+
+    let H_inv_matrix = null;
+    if (overlay.distortedCorners) {
+      const dc = overlay.distortedCorners;
+      const src = [
+        {x: 0, y: 0},
+        {x: W, y: 0},
+        {x: W, y: H},
+        {x: 0, y: H}
+      ];
+      const dst = [
+        {x: dc.nw.lng, y: dc.nw.lat},
+        {x: dc.ne.lng, y: dc.ne.lat},
+        {x: dc.se.lng, y: dc.se.lat},
+        {x: dc.sw.lng, y: dc.sw.lat}
+      ];
+      // Swap src and dst to solve for the inverse homography
+      H_inv_matrix = solveHomography(dst, src);
+    }
+
+    return latLngs.map((ll) => {
+      const lat = typeof ll.lat === 'function' ? ll.lat() : ll.lat;
+      const lng = typeof ll.lng === 'function' ? ll.lng() : ll.lng;
+
+      if (H_inv_matrix) {
+        const pt = mapPoint(lng, lat, H_inv_matrix);
+        return { x: pt.x, y: pt.y };
+      } else {
+        const { dx, dy } = this.latLngToPoint(overlay, lat, lng);
+        const px = (dx / scaleX) + (W / 2);
+        const py = (H / 2) - (dy / scaleY);
+        return { x: px, y: py };
+      }
+    });
+  }
+
   // Returns array of objects formatted exactly as requested
   getState() {
     return Array.from(this.overlays.values()).map(entry => {
@@ -285,7 +367,8 @@ export default class FloorPlanManager {
       const cornersObj = this.computeCorners(entry.overlay);
       const scale = entry.overlay.widthMeters / entry.originalWidth; // update scale from current width
       return {
-        id: entry.id, // we might need id for internal mapping, but prompt just says structure
+        id: entry.id,
+        name: entry.name || 'Floor Plan',
         floorplan: entry.url,
         bounds,
         corners: cornersObj,
@@ -294,7 +377,8 @@ export default class FloorPlanManager {
         scale,
         opacity: entry.overlay.opacity,
         layerId: entry.layerId || 'layer-1',
-        timestamp: entry.timestamp || new Date().toISOString()
+        timestamp: entry.timestamp || new Date().toISOString(),
+        visible: entry.itemVisible !== false
       };
     });
   }
@@ -318,6 +402,13 @@ export default class FloorPlanManager {
 
   onChange(id) {
     this.callbacks.onChange && this.callbacks.onChange(id);
+  }
+
+  toggleVisibility(id) {
+    const entry = this.overlays.get(id);
+    if (!entry) return;
+    entry.itemVisible = entry.itemVisible === false ? true : false;
+    this.callbacks.onChange && this.callbacks.onChange();
   }
 
   setAllPointerEvents(isClickable) {

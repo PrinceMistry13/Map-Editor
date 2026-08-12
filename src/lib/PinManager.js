@@ -12,16 +12,17 @@ export default class PinManager {
     }
 
     // ---------------------------------------------------------------- placement
-    armPlacement(defaultColor = '#00CED1', layerId = 'layer-1') {
+    armPlacement(defaultColor = '#00CED1', layerId = 'layer-1', metadata = {}) {
         if (this.armed) return;
         this.armed = true;
         this._defaultColor = defaultColor;
         this._layerId = layerId;
+        this._metadata = metadata;
         this.map.setOptions({ draggableCursor: 'copy' });
         this._clickListener = this.map.addListener('click', (e) => {
             const id = nextId('pin');
             const position = { lat: e.latLng.lat(), lng: e.latLng.lng() };
-            this.createPin(id, `Pin ${this.pins.size + 1}`, this._defaultColor, position, 'default', null, this._layerId);
+            this.createPin(id, `Pin ${this.pins.size + 1}`, this._defaultColor, position, 'default', null, this._layerId, this._metadata);
             this.callbacks.pushHistory && this.callbacks.pushHistory({
                 undo: () => this.deletePin(id, true),
                 redo: () => this.createPin(id, `Pin ${this.pins.size + 1}`, this._defaultColor, position, 'default', null, this._layerId),
@@ -39,15 +40,15 @@ export default class PinManager {
     }
 
     // ---------------------------------------------------------------- lifecycle
-    createPin(id, name, color, position, styleMode = 'default', imageDataUrl = null, layerId = 'layer-1') {
+    createPin(id, name, color, position, styleMode = 'default', imageDataUrl = null, layerId = 'layer-1', metadata = {}) {
         const marker = new window.google.maps.Marker({
             position, 
             map: this.map, 
-            draggable: false, 
+            draggable: true,
             zIndex: 100,
             icon: pinSvgIcon(color, styleMode === 'custom' ? imageDataUrl : null),
         });
-        const entry = { id, name, color, position, styleMode, imageDataUrl, layerId, marker };
+        const entry = { id, name, color, position, styleMode, imageDataUrl, layerId, marker, itemVisible: true, metadata };
         this.pins.set(id, entry);
 
         marker.addListener('click', (e) => {
@@ -78,7 +79,11 @@ export default class PinManager {
     }
 
     loadPin(data) {
-        this.createPin(data.id, data.name, data.color, data.position, data.styleMode, data.imageDataUrl, data.layerId || 'layer-1');
+        if (!data.id) data.id = nextId('pin');
+        const entry = this.createPin(data.id, data.name, data.color, data.position, data.styleMode, data.imageDataUrl, data.layerId || 'layer-1', data.metadata || {});
+        if (data.visible === false) {
+            entry.itemVisible = false;
+        }
     }
 
     loadAll(pinsData = []) {
@@ -146,6 +151,26 @@ export default class PinManager {
         if (this.selectedId === id) this.callbacks.onSelect && this.callbacks.onSelect({ ...entry });
     }
 
+    setUniformColor(id, color) {
+        const entry = this.pins.get(id);
+        if (!entry) return;
+        if (!entry.originalColor) entry.originalColor = entry.color;
+        entry.color = color;
+        entry.marker.setIcon(pinSvgIcon(color, entry.styleMode === 'custom' ? entry.imageDataUrl : null));
+        this.callbacks.onChange && this.callbacks.onChange();
+        if (this.selectedId === id) this.callbacks.onSelect && this.callbacks.onSelect({ ...entry });
+    }
+
+    restoreOriginalColor(id) {
+        const entry = this.pins.get(id);
+        if (!entry || !entry.originalColor) return;
+        entry.color = entry.originalColor;
+        entry.marker.setIcon(pinSvgIcon(entry.color, entry.styleMode === 'custom' ? entry.imageDataUrl : null));
+        entry.originalColor = null;
+        this.callbacks.onChange && this.callbacks.onChange();
+        if (this.selectedId === id) this.callbacks.onSelect && this.callbacks.onSelect({ ...entry });
+    }
+
     setStyle(id, styleMode, imageDataUrl) {
         const entry = this.pins.get(id);
         if (!entry) return;
@@ -191,10 +216,17 @@ export default class PinManager {
         }
         if (!skipHistory) {
             this.callbacks.pushHistory && this.callbacks.pushHistory({
-                undo: () => this.loadPin({ id, name, color, position, styleMode, imageDataUrl, layerId }),
+                undo: () => this.loadPin({ id, name, color, position, styleMode, imageDataUrl, layerId, metadata: entry.metadata }),
                 redo: () => this.deletePin(id, true),
             });
         }
+        this.callbacks.onChange && this.callbacks.onChange();
+    }
+
+    toggleVisibility(id) {
+        const entry = this.pins.get(id);
+        if (!entry) return;
+        entry.itemVisible = entry.itemVisible === false ? true : false;
         this.callbacks.onChange && this.callbacks.onChange();
     }
 
@@ -216,6 +248,8 @@ export default class PinManager {
             imageDataUrl: entry.imageDataUrl,
             layerId: entry.layerId || 'layer-1',
             position: entry.marker.getPosition().toJSON(),
+            metadata: entry.metadata || {},
+            visible: entry.itemVisible !== false
         }));
     }
 
