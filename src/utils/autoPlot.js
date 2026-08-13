@@ -894,7 +894,7 @@
 //     }
 //   }
 // }
-import Tesseract from 'tesseract.js';
+
 
 export async function detectUnitsFromImage(floorPlanManager, floorPlanId) {
     const entry = floorPlanManager.overlays.get(floorPlanId);
@@ -915,438 +915,244 @@ export async function detectUnitsFromImage(floorPlanManager, floorPlanId) {
     ctx.drawImage(bitmap, 0, 0, W, H);
     const imageData = ctx.getImageData(0, 0, W, H);
 
-    // --- OCR PREPROCESSING ---
-    let cvMatsToClean = [];
-    let ocrCanvas = document.createElement('canvas');
-    try {
-        let srcOcr = cv.matFromImageData(imageData);
-        cvMatsToClean.push(srcOcr);
-
-        let ocrScaled = new cv.Mat();
-        cvMatsToClean.push(ocrScaled);
-        cv.resize(srcOcr, ocrScaled, new cv.Size(), 2.0, 2.0, cv.INTER_CUBIC);
-
-        let ocrGray = new cv.Mat();
-        cvMatsToClean.push(ocrGray);
-        cv.cvtColor(ocrScaled, ocrGray, cv.COLOR_RGBA2GRAY, 0);
-
-        let ocrThresh = new cv.Mat();
-        cvMatsToClean.push(ocrThresh);
-        // Adaptive Threshold (from user spec: cv2.THRESH_BINARY, 25, 10)
-        cv.adaptiveThreshold(ocrGray, ocrThresh, 255, cv.ADAPTIVE_THRESH_GAUSSIAN_C, cv.THRESH_BINARY, 25, 10);
-
-        let ocrRgba = new cv.Mat();
-        cvMatsToClean.push(ocrRgba);
-        cv.cvtColor(ocrThresh, ocrRgba, cv.COLOR_GRAY2RGBA, 0);
-
-        let ocrImgData = new ImageData(new Uint8ClampedArray(ocrRgba.data), ocrRgba.cols, ocrRgba.rows);
-        ocrCanvas.width = ocrRgba.cols;
-        ocrCanvas.height = ocrRgba.rows;
-        ocrCanvas.getContext('2d').putImageData(ocrImgData, 0, 0);
-    } finally {
-        for (let m of cvMatsToClean) {
-            if (m) { try { m.delete(); } catch (e) { } }
-        }
-    }
-
-    // --- OCR PASS ---
-    const worker = await Tesseract.createWorker('eng');
-    await worker.setParameters({
-        tessedit_char_whitelist: '0123456789\'"- ./',
-        tessedit_pageseg_mode: '11' // SPARSE_TEXT
-    });
-    const tesseractResult = await worker.recognize(ocrCanvas, {}, { tsv: true });
-    await worker.terminate();
-
-    let ocrLabels = [];
-    if (tesseractResult.data.tsv) {
-        const tsvLines = tesseractResult.data.tsv.split('\n');
-        for (let i = 1; i < tsvLines.length; i++) {
-            let parts = tsvLines[i].split('\t');
-            if (parts.length >= 12) {
-                let level = parseInt(parts[0]);
-                let conf = parseFloat(parts[10]);
-                let text = parts.slice(11).join('\t').trim();
-
-                // Apply confidence gate > 25 (relaxed)
-                if (level === 5 && text && conf >= 25) {
-                    // Divide coords by 2 because we upscaled 2x
-                    let left = parseInt(parts[6]) / 2.0;
-                    let top = parseInt(parts[7]) / 2.0;
-                    let width = parseInt(parts[8]) / 2.0;
-                    let height = parseInt(parts[9]) / 2.0;
-                    let cx = left + width / 2;
-                    let cy = top + height / 2;
-                    ocrLabels.push({ text: text, x: cx, y: cy, height: height, x0: left, y0: top, width: width, conf: conf });
-                }
-            }
-        }
-    }
-
-    function ptInPolygon(pt, pixels) {
-        let inside = false;
-        for (let i = 0, j = pixels.length - 1; i < pixels.length; j = i++) {
-            let xi = pixels[i].x, yi = pixels[i].y;
-            let xj = pixels[j].x, yj = pixels[j].y;
-            let intersect = ((yi > pt.y) !== (yj > pt.y))
-                && (pt.x < (xj - xi) * (pt.y - yi) / (yj - yi) + xi);
-            if (intersect) inside = !inside;
-        }
-        return inside;
-    }
-
     let matsToDelete = [];
-    try {
-        let src = cv.matFromImageData(imageData);
-        matsToDelete.push(src);
+try {
+    let src = cv.matFromImageData(imageData);
+    matsToDelete.push(src);
 
-        let gray = new cv.Mat();
-        matsToDelete.push(gray);
-        cv.cvtColor(src, gray, cv.COLOR_RGBA2GRAY, 0);
-        cv.GaussianBlur(gray, gray, new cv.Size(3, 3), 0, 0, cv.BORDER_DEFAULT);
+    let gray = new cv.Mat();
+    matsToDelete.push(gray);
+    cv.cvtColor(src, gray, cv.COLOR_RGBA2GRAY, 0);
+    cv.GaussianBlur(gray, gray, new cv.Size(3, 3), 0, 0, cv.BORDER_DEFAULT);
 
-        let imageArea = W * H;
-        // Helper: bounding box of a pixel-path
-        function getBBox(pixels) {
-            let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
-            for (let p of pixels) {
-                if (p.x < minX) minX = p.x;
-                if (p.x > maxX) maxX = p.x;
-                if (p.y < minY) minY = p.y;
-                if (p.y > maxY) maxY = p.y;
-            }
-            return { x: minX, y: minY, w: maxX - minX, h: maxY - minY };
+    let imageArea = W * H;
+    // Helper: bounding box of a pixel-path
+    function getBBox(pixels) {
+        let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
+        for (let p of pixels) {
+            if (p.x < minX) minX = p.x;
+            if (p.x > maxX) maxX = p.x;
+            if (p.y < minY) minY = p.y;
+            if (p.y > maxY) maxY = p.y;
+        }
+        return { x: minX, y: minY, w: maxX - minX, h: maxY - minY };
+    }
+
+    // --- Core Detection Pass: multi-preset Canny + shape-quality filter ---
+    const parameterSets = [
+        { canny: [50, 150], dilate: 1 },
+        { canny: [30, 90], dilate: 2 },
+        { canny: [80, 200], dilate: 0 }
+    ];
+
+    const minArea = imageArea * 0.0005; // reject tiny noise (< 0.05% of image)
+    const maxArea = imageArea * 0.8;    // reject huge outer boundary (> 80% of image)
+    let candidateContours = [];
+
+    const M = cv.Mat.ones(3, 3, cv.CV_8U);
+    matsToDelete.push(M);
+
+    for (const params of parameterSets) {
+        let edges = new cv.Mat();
+        matsToDelete.push(edges);
+        cv.Canny(gray, edges, params.canny[0], params.canny[1], 3, false);
+
+        if (params.dilate > 0) {
+            cv.dilate(edges, edges, M, new cv.Point(-1, -1), params.dilate, cv.BORDER_CONSTANT, cv.morphologyDefaultBorderValue());
+            cv.erode(edges, edges, M, new cv.Point(-1, -1), params.dilate, cv.BORDER_CONSTANT, cv.morphologyDefaultBorderValue());
         }
 
-        // --- Core Detection Pass: multi-preset Canny + shape-quality filter ---
-        const parameterSets = [
-            { canny: [50, 150], dilate: 1 },
-            { canny: [30, 90], dilate: 2 },
-            { canny: [80, 200], dilate: 0 }
-        ];
+        let contours = new cv.MatVector();
+        let hierarchy = new cv.Mat();
+        matsToDelete.push(contours, hierarchy);
+        cv.findContours(edges, contours, hierarchy, cv.RETR_LIST, cv.CHAIN_APPROX_SIMPLE);
 
-        const minArea = imageArea * 0.0005; // reject tiny noise (< 0.05% of image)
-        const maxArea = imageArea * 0.8;    // reject huge outer boundary (> 80% of image)
-        let candidateContours = [];
-
-        const M = cv.Mat.ones(3, 3, cv.CV_8U);
-        matsToDelete.push(M);
-
-        for (const params of parameterSets) {
-            let edges = new cv.Mat();
-            matsToDelete.push(edges);
-            cv.Canny(gray, edges, params.canny[0], params.canny[1], 3, false);
-
-            if (params.dilate > 0) {
-                cv.dilate(edges, edges, M, new cv.Point(-1, -1), params.dilate, cv.BORDER_CONSTANT, cv.morphologyDefaultBorderValue());
-                cv.erode(edges, edges, M, new cv.Point(-1, -1), params.dilate, cv.BORDER_CONSTANT, cv.morphologyDefaultBorderValue());
-            }
-
-            let contours = new cv.MatVector();
-            let hierarchy = new cv.Mat();
-            matsToDelete.push(contours, hierarchy);
-            cv.findContours(edges, contours, hierarchy, cv.RETR_LIST, cv.CHAIN_APPROX_SIMPLE);
-
-            for (let i = 0; i < contours.size(); ++i) {
-                const contour = contours.get(i);
+        for (let i = 0; i < contours.size(); ++i) {
+            const contour = contours.get(i);
+            try {
                 const area = cv.contourArea(contour);
                 if (!(area > minArea && area < maxArea)) continue;
 
                 const hull = new cv.Mat();
-                cv.convexHull(contour, hull, false, true);
-                const hullArea = cv.contourArea(hull);
-                const solidity = hullArea > 0 ? area / hullArea : 0;
+                try {
+                    cv.convexHull(contour, hull, false, true);
+                    const hullArea = cv.contourArea(hull);
+                    const solidity = hullArea > 0 ? area / hullArea : 0;
 
-                const rect = cv.boundingRect(hull);
-                const aspectRatio = Math.max(rect.width / rect.height, rect.height / rect.width);
-                const rectangularity = area / (rect.width * rect.height);
+                    const rect = cv.boundingRect(hull);
+                    const aspectRatio = Math.max(rect.width / rect.height, rect.height / rect.width);
+                    const rectangularity = area / (rect.width * rect.height);
 
-                if (solidity > 0.5 && aspectRatio < 5 && rectangularity > 0.3) {
-                    // Text Masking (kept from original): reject small contours mostly inside OCR text bounding boxes
-                    let isText = false;
-                    for (let lbl of ocrLabels) {
-                        let intersectX = Math.max(0, Math.min(rect.x + rect.width, lbl.x0 + lbl.width) - Math.max(rect.x, lbl.x0));
-                        let intersectY = Math.max(0, Math.min(rect.y + rect.height, lbl.y0 + lbl.height) - Math.max(rect.y, lbl.y0));
-                        if (intersectX > 0 && intersectY > 0) {
-                            let intersectArea = intersectX * intersectY;
-                            let rectArea = rect.width * rect.height;
-                            if (intersectArea > rectArea * 0.6 && rectArea < imageArea * 0.01) {
-                                isText = true; break;
+                    if (solidity > 0.5 && aspectRatio < 5 && rectangularity > 0.3) {
+
+                        const approx = new cv.Mat();
+                        try {
+                            // Relaxed relative epsilon (0.8% of hull arc length) smooths text-bump jaggedness
+                            const epsilon = 0.008 * cv.arcLength(hull, true);
+                            cv.approxPolyDP(hull, approx, epsilon, true);
+
+                            // Allow up to 12 vertices to prevent rejecting slightly noisy plots
+                            if (approx.rows >= 4 && approx.rows <= 12) {
+                                const M_moments = cv.moments(hull);
+                                const cx = M_moments.m10 / M_moments.m00;
+                                const cy = M_moments.m01 / M_moments.m00;
+
+                                const pixels = [];
+                                for (let j = 0; j < approx.rows; j++) {
+                                    pixels.push({ x: approx.data32S[j * 2], y: approx.data32S[j * 2 + 1] });
+                                }
+                                candidateContours.push({ area, cx, cy, pixels, bbox: getBBox(pixels) });
                             }
+                        } finally {
+                            approx.delete();
                         }
                     }
-                    if (isText) { hull.delete(); continue; }
-
-                    const approx = new cv.Mat();
-                    // Relaxed relative epsilon (0.8% of hull arc length) smooths text-bump jaggedness
-                    const epsilon = 0.008 * cv.arcLength(hull, true);
-                    cv.approxPolyDP(hull, approx, epsilon, true);
-
-                    // Allow up to 12 vertices to prevent rejecting slightly noisy plots
-                    if (approx.rows >= 4 && approx.rows <= 12) {
-                        const M_moments = cv.moments(hull);
-                        const cx = M_moments.m10 / M_moments.m00;
-                        const cy = M_moments.m01 / M_moments.m00;
-
-                        const pixels = [];
-                        for (let j = 0; j < approx.rows; j++) {
-                            pixels.push({ x: approx.data32S[j * 2], y: approx.data32S[j * 2 + 1] });
-                        }
-                        candidateContours.push({ area, cx, cy, pixels, bbox: getBBox(pixels) });
-                    }
-                    approx.delete();
+                } finally {
+                    hull.delete();
                 }
-                hull.delete();
-            }
-        }
-
-        if (candidateContours.length === 0) return [];
-
-        // Area-range filtering relative to the detected median plot size
-        candidateContours.sort((a, b) => a.area - b.area);
-        const medianArea = candidateContours[Math.floor(candidateContours.length / 2)].area;
-        const dynamicMinArea = medianArea * 0.1;
-        const maxPlotArea = medianArea * 15.0;
-        let uniqueCandidates = candidateContours.filter(c => c.area >= dynamicMinArea && c.area <= maxPlotArea);
-
-        // Centroid-distance dedup: process smallest-first so innermost/duplicate double-line contours collapse
-        const acceptedForDedup = [];
-        const dedupedCandidates = [];
-        for (const candidate of uniqueCandidates) {
-            let isDuplicate = false;
-            for (const accepted of acceptedForDedup) {
-                const dist = Math.hypot(accepted.cx - candidate.cx, accepted.cy - candidate.cy);
-                if (dist < W * 0.02) { isDuplicate = true; break; }
-                const candidateRadius = Math.sqrt(candidate.area / Math.PI);
-                if (dist < candidateRadius * 0.8) { isDuplicate = true; break; }
-            }
-            if (!isDuplicate) {
-                acceptedForDedup.push(candidate);
-                dedupedCandidates.push(candidate);
-            }
-        }
-        uniqueCandidates = dedupedCandidates;
-
-        // --- Assign Plot Numbers from OCR ---
-        function getOverlapScore(lbl, pixels) {
-            let pts = [
-                { x: lbl.x0, y: lbl.y0 }, { x: lbl.x, y: lbl.y0 }, { x: lbl.x0 + lbl.width, y: lbl.y0 },
-                { x: lbl.x0, y: lbl.y }, { x: lbl.x, y: lbl.y }, { x: lbl.x0 + lbl.width, y: lbl.y },
-                { x: lbl.x0, y: lbl.y0 + lbl.height }, { x: lbl.x, y: lbl.y0 + lbl.height }, { x: lbl.x0 + lbl.width, y: lbl.y0 + lbl.height }
-            ];
-            let count = 0;
-            for (let pt of pts) {
-                if (ptInPolygon(pt, pixels)) count++;
-            }
-            return count;
-        }
-
-        // Exclusively bind each OCR label to the polygon that contains most of its bbox
-        let cat4Count = 0;
-        for (let lbl of ocrLabels) {
-            let bestPolyIndex = -1;
-            let maxOverlap = 0;
-            for (let i = 0; i < uniqueCandidates.length; i++) {
-                let overlap = getOverlapScore(lbl, uniqueCandidates[i].pixels);
-                if (overlap > maxOverlap) {
-                    maxOverlap = overlap;
-                    bestPolyIndex = i;
-                }
-            }
-            lbl.bestPolyIndex = bestPolyIndex;
-
-            // Category 4: Binding failed
-            if (bestPolyIndex === -1 && /^[^a-zA-Z]*\d+[^a-zA-Z]*$/.test(lbl.text.trim())) {
-                console.log(`[Diagnostic] Category 4: Binding failed for digit text "${lbl.text}". Bbox: x=${lbl.x0}, y=${lbl.y0}`);
-                cat4Count++;
-            }
-        }
-
-        for (let i = 0; i < uniqueCandidates.length; i++) {
-            let c = uniqueCandidates[i];
-            let insideLabels = ocrLabels.filter(lbl => lbl.bestPolyIndex === i);
-
-            // Only allow strings that consist entirely of digits (and optional whitespace)
-            // This strictly excludes dimensions like "40'-0"" or labels with letters/symbols.
-            let idCandidates = insideLabels.filter(lbl => /^\s*\d+\s*$/.test(lbl.text));
-
-            if (idCandidates.length > 0) {
-                for (let lbl of idCandidates) {
-                    let rx = Math.max(0, lbl.x0);
-                    let ry = Math.max(0, lbl.y0);
-                    let rw = Math.min(W - rx, lbl.width);
-                    let rh = Math.min(H - ry, lbl.height);
-
-                    if (rw <= 0 || rh <= 0) {
-                        lbl.boldness = 0;
-                        continue;
-                    }
-
-                    let rect = new cv.Rect(rx, ry, rw, rh);
-                    let roi = gray.roi(rect);
-                    let thresh = new cv.Mat();
-                    cv.threshold(roi, thresh, 0, 255, cv.THRESH_BINARY_INV | cv.THRESH_OTSU);
-                    let blackPixels = cv.countNonZero(thresh);
-                    lbl.boldness = blackPixels / (rw * rh);
-                    lbl.absScore = lbl.height * lbl.boldness * (lbl.conf / 100.0);
-                    thresh.delete();
-                    roi.delete();
-                }
-
-                let maxHeight = Math.max(...idCandidates.map(l => l.height));
-                let maxBoldness = Math.max(...idCandidates.map(l => l.boldness));
-                if (maxHeight === 0) maxHeight = 1;
-                if (maxBoldness === 0) maxBoldness = 1;
-
-                idCandidates.forEach(lbl => {
-                    lbl.score = 0.6 * (lbl.height / maxHeight) + 0.4 * (lbl.boldness / maxBoldness);
-                });
-
-                idCandidates.sort((a, b) => b.score - a.score);
-
-                let best = idCandidates[0];
-                let ambiguous = idCandidates.length > 1 && (idCandidates[0].score - idCandidates[1].score < 0.10);
-
-                if (ambiguous) {
-                    console.log(`[Diagnostic] Plot ${i} missing ID (Category 2): Ambiguous tie between candidates`, idCandidates.map(c => c.text));
-                    c.id = null;
-                    c.failCategory = 2;
-                } else {
-                    c.id = best.text.replace(/[^\d]/g, ''); // Extract just the digits
-                    c.idScore = best.absScore;
-                }
-            } else {
-                if (insideLabels.length === 0) {
-                    console.log(`[Diagnostic] Plot ${i} missing ID (Category 1): No OCR text detected inside polygon.`);
-                    c.failCategory = 1;
-                } else {
-                    console.log(`[Diagnostic] Plot ${i} missing ID (Category 2): Found text but no digits passed filter. Texts:`, insideLabels.map(l => l.text));
-                    c.failCategory = 2;
-                }
-                c.id = null;
-            }
-
-            // Ignored all other text/dimensions per user constraint
-        }
-
-        // --- Global Uniqueness Pass ---
-        let idMap = {};
-        for (let i = 0; i < uniqueCandidates.length; i++) {
-            let id = uniqueCandidates[i].id;
-            if (id) {
-                if (!idMap[id]) idMap[id] = [];
-                idMap[id].push(i);
-            }
-        }
-
-        for (let id in idMap) {
-            if (idMap[id].length > 1) {
-                let indices = idMap[id];
-                // Sort conflicting plots by the absolute score of their winning label
-                indices.sort((a, b) => uniqueCandidates[b].idScore - uniqueCandidates[a].idScore);
-                // The plot with the highest absolute quality keeps the ID, others get null
-                for (let j = 1; j < indices.length; j++) {
-                    console.log(`[Diagnostic] Plot ${indices[j]} missing ID (Category 3): Conflict for ID ${id}. Lost to Plot ${indices[0]}. Scores: Winner=${uniqueCandidates[indices[0]].idScore}, Loser=${uniqueCandidates[indices[j]].idScore}`);
-                    uniqueCandidates[indices[j]].id = null;
-                    uniqueCandidates[indices[j]].failCategory = 3;
-                }
-            }
-        }
-
-
-
-        // --- Final Invariant Check: Zero Overlap Guarantee ---
-        // Ensure no two plots overlap by more than a small sliver (e.g. 5% area).
-        let validFinalCandidates = [];
-        for (let i = 0; i < uniqueCandidates.length; i++) {
-            let c = uniqueCandidates[i];
-            if (!c.bbox) c.bbox = getBBox(c.pixels); // Ensure gap-fill candidates have bbox
-            let hasConflict = false;
-
-            for (let j = 0; j < validFinalCandidates.length; j++) {
-                let u = validFinalCandidates[j];
-                let ix = Math.max(c.bbox.x, u.bbox.x);
-                let iy = Math.max(c.bbox.y, u.bbox.y);
-                let iw = Math.min(c.bbox.x + c.bbox.w, u.bbox.x + u.bbox.w) - ix;
-                let ih = Math.min(c.bbox.y + c.bbox.h, u.bbox.y + u.bbox.h) - iy;
-
-                if (iw > 0 && ih > 0) {
-                    let mask1 = cv.Mat.zeros(ih, iw, cv.CV_8U);
-                    let mask2 = cv.Mat.zeros(ih, iw, cv.CV_8U);
-                    let inter = new cv.Mat();
-
-                    let flat1 = [], flat2 = [];
-                    for (let p of c.pixels) flat1.push(p.x - ix, p.y - iy);
-                    for (let p of u.pixels) flat2.push(p.x - ix, p.y - iy);
-
-                    let mat1 = cv.matFromArray(c.pixels.length, 1, cv.CV_32SC2, flat1);
-                    let pts1 = new cv.MatVector(); pts1.push_back(mat1);
-                    cv.fillPoly(mask1, pts1, new cv.Scalar(255));
-
-                    let mat2 = cv.matFromArray(u.pixels.length, 1, cv.CV_32SC2, flat2);
-                    let pts2 = new cv.MatVector(); pts2.push_back(mat2);
-                    cv.fillPoly(mask2, pts2, new cv.Scalar(255));
-
-                    cv.bitwise_and(mask1, mask2, inter);
-                    let overlapArea = cv.countNonZero(inter);
-
-                    mask1.delete(); mask2.delete(); inter.delete();
-                    mat1.delete(); pts1.delete(); mat2.delete(); pts2.delete();
-
-                    // If overlap is > 5% of the smaller area, it's a conflict
-                    let minArea = Math.min(c.area, u.area);
-                    if (overlapArea > minArea * 0.05) {
-                        hasConflict = true;
-                        console.log(`[Diagnostic] Plot rejected due to severe boundary conflict/overlap. IoU check failed.`);
-                        break;
-                    }
-                }
-            }
-
-            if (!hasConflict) {
-                validFinalCandidates.push(c);
-            }
-        }
-
-        uniqueCandidates = validFinalCandidates;
-
-        let summary = { success: 0, cat1_NoOCR: 0, cat2_NoQualifyingDigits: 0, cat3_ConflictLost: 0, cat4_UnboundDigits: cat4Count };
-        uniqueCandidates.forEach(c => {
-            if (c.id) summary.success++;
-            else if (c.failCategory === 1) summary.cat1_NoOCR++;
-            else if (c.failCategory === 2) summary.cat2_NoQualifyingDigits++;
-            else if (c.failCategory === 3) summary.cat3_ConflictLost++;
-        });
-        console.log(`=== AutoPlot Diagnostics Summary ===`, summary);
-
-        // Output strictly requested JSON format
-        let extractedJSON = {
-            "Extracted_Plots": uniqueCandidates
-                .filter(c => c.id !== null)
-                .map(c => ({
-                    plot_number: parseInt(c.id, 10),
-                    status: "Assigned to boundary"
-                }))
-        };
-        console.log(JSON.stringify(extractedJSON, null, 2));
-
-        // --- Final Projection ---
-        let detectedPaths = [];
-        for (let c of uniqueCandidates) {
-            let latLngs = floorPlanManager.projectPixelsToLatLngs(floorPlanId, c.pixels, W, H);
-            if (latLngs && latLngs.length > 0) {
-                latLngs.push({ lat: latLngs[0].lat, lng: latLngs[0].lng }); // Close ring
-                detectedPaths.push({ path: latLngs, id: c.id, sqyd: c.sqyd, length: c.length, width: c.width });
-            }
-        }
-
-        return detectedPaths;
-
-    } finally {
-        for (let mat of matsToDelete) {
-            if (mat) {
-                try { mat.delete(); } catch (e) { }
+            } finally {
+                contour.delete();
             }
         }
     }
+
+    if (candidateContours.length === 0) return [];
+
+    // Area-range filtering relative to the detected median plot size
+    candidateContours.sort((a, b) => a.area - b.area);
+    const medianArea = candidateContours[Math.floor(candidateContours.length / 2)].area;
+    const dynamicMinArea = medianArea * 0.1;
+    const maxPlotArea = medianArea * 15.0;
+    let uniqueCandidates = candidateContours.filter(c => c.area >= dynamicMinArea && c.area <= maxPlotArea);
+
+    // Centroid-distance dedup: process smallest-first so innermost/duplicate double-line contours collapse
+    const acceptedForDedup = [];
+    const dedupedCandidates = [];
+    for (const candidate of uniqueCandidates) {
+        let isDuplicate = false;
+        for (const accepted of acceptedForDedup) {
+            const dist = Math.hypot(accepted.cx - candidate.cx, accepted.cy - candidate.cy);
+            if (dist < W * 0.02) { isDuplicate = true; break; }
+            const candidateRadius = Math.sqrt(candidate.area / Math.PI);
+            if (dist < candidateRadius * 0.8) { isDuplicate = true; break; }
+        }
+        if (!isDuplicate) {
+            acceptedForDedup.push(candidate);
+            dedupedCandidates.push(candidate);
+        }
+    }
+    uniqueCandidates = dedupedCandidates;
+
+    // --- Final Invariant Check: Zero Overlap Guarantee ---
+    // Ensure no two plots overlap by more than a small sliver (e.g. 5% area).
+    let validFinalCandidates = [];
+    for (let i = 0; i < uniqueCandidates.length; i++) {
+        let c = uniqueCandidates[i];
+        if (!c.bbox) c.bbox = getBBox(c.pixels); // Ensure gap-fill candidates have bbox
+        let hasConflict = false;
+
+        for (let j = 0; j < validFinalCandidates.length; j++) {
+            let u = validFinalCandidates[j];
+            let ix = Math.max(c.bbox.x, u.bbox.x);
+            let iy = Math.max(c.bbox.y, u.bbox.y);
+            let iw = Math.min(c.bbox.x + c.bbox.w, u.bbox.x + u.bbox.w) - ix;
+            let ih = Math.min(c.bbox.y + c.bbox.h, u.bbox.y + u.bbox.h) - iy;
+
+            if (iw > 0 && ih > 0) {
+                // Mask must cover the UNION of both polygons, not just the
+                // intersection box — fillPoly is given full polygon point
+                // lists below, and points landing outside the mask bounds
+                // is what causes native "memory access out of bounds".
+                let ux = Math.min(c.bbox.x, u.bbox.x);
+                let uy = Math.min(c.bbox.y, u.bbox.y);
+                let uw = Math.max(c.bbox.x + c.bbox.w, u.bbox.x + u.bbox.w) - ux;
+                let uh = Math.max(c.bbox.y + c.bbox.h, u.bbox.y + u.bbox.h) - uy;
+
+                let mask1 = cv.Mat.zeros(uh, uw, cv.CV_8U);
+                let mask2 = cv.Mat.zeros(uh, uw, cv.CV_8U);
+                let inter = new cv.Mat();
+
+                let flat1 = [], flat2 = [];
+                for (let p of c.pixels) flat1.push(p.x - ux, p.y - uy);
+                for (let p of u.pixels) flat2.push(p.x - ux, p.y - uy);
+
+                let mat1 = cv.matFromArray(c.pixels.length, 1, cv.CV_32SC2, flat1);
+                let pts1 = new cv.MatVector(); pts1.push_back(mat1);
+                cv.fillPoly(mask1, pts1, new cv.Scalar(255));
+
+                let mat2 = cv.matFromArray(u.pixels.length, 1, cv.CV_32SC2, flat2);
+                let pts2 = new cv.MatVector(); pts2.push_back(mat2);
+                cv.fillPoly(mask2, pts2, new cv.Scalar(255));
+
+                cv.bitwise_and(mask1, mask2, inter);
+                let overlapArea = cv.countNonZero(inter);
+
+                mask1.delete(); mask2.delete(); inter.delete();
+                mat1.delete(); pts1.delete(); mat2.delete(); pts2.delete();
+
+                // If overlap is > 5% of the smaller area, it's a conflict
+                let minArea = Math.min(c.area, u.area);
+                if (overlapArea > minArea * 0.05) {
+                    hasConflict = true;
+                    console.log(`[Diagnostic] Plot rejected due to severe boundary conflict/overlap. IoU check failed.`);
+                    break;
+                }
+            }
+        }
+
+        if (!hasConflict) {
+            validFinalCandidates.push(c);
+        }
+    }
+
+    uniqueCandidates = validFinalCandidates;
+
+    // --- Sequential Numbering (no OCR) ---
+    // Number plots 1..N in reading order (top-to-bottom, then left-to-right
+    // within a row band) so numbering is stable and predictable rather than
+    // depending on contour-detection order. Every candidate gets a number;
+    // since it's just an incrementing counter, numbers are guaranteed unique.
+    const rowBandHeight = Math.max(1, medianArea > 0 ? Math.sqrt(medianArea) * 0.5 : H * 0.01);
+    const readingOrder = [...uniqueCandidates].sort((a, b) => {
+        const rowA = Math.floor(a.cy / rowBandHeight);
+        const rowB = Math.floor(b.cy / rowBandHeight);
+        if (rowA !== rowB) return rowA - rowB;
+        return a.cx - b.cx;
+    });
+    readingOrder.forEach((c, idx) => {
+        c.id = String(idx + 1);
+    });
+
+    console.log(`=== AutoPlot Summary === ${uniqueCandidates.length} plots numbered 1-${uniqueCandidates.length}`);
+
+    // Output strictly requested JSON format
+    let extractedJSON = {
+        "Extracted_Plots": uniqueCandidates
+            .filter(c => c.id !== null)
+            .map(c => ({
+                plot_number: parseInt(c.id, 10),
+                status: "Assigned to boundary"
+            }))
+    };
+    console.log(JSON.stringify(extractedJSON, null, 2));
+
+    // --- Final Projection ---
+    let detectedPaths = [];
+    for (let c of uniqueCandidates) {
+        let latLngs = floorPlanManager.projectPixelsToLatLngs(floorPlanId, c.pixels, W, H);
+        if (latLngs && latLngs.length > 0) {
+            latLngs.push({ lat: latLngs[0].lat, lng: latLngs[0].lng }); // Close ring
+            detectedPaths.push({ path: latLngs, id: c.id, sqyd: c.sqyd, length: c.length, width: c.width });
+        }
+    }
+
+    return detectedPaths;
+
+} finally {
+    for (let mat of matsToDelete) {
+        if (mat) {
+            try { mat.delete(); } catch (e) { }
+        }
+    }
+}
 }

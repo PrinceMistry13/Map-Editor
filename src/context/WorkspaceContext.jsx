@@ -164,10 +164,10 @@ export function WorkspaceProvider({ children }) {
       const draggedIndex = layers.findIndex(l => l.id === draggedId);
       const targetIndex = layers.findIndex(l => l.id === targetId);
       if (draggedIndex < 0 || targetIndex < 0) return proj;
-      
+
       const [draggedLayer] = layers.splice(draggedIndex, 1);
       layers.splice(targetIndex, 0, draggedLayer);
-      
+
       // Update order field
       layers.forEach((l, i) => { l.order = i; });
       return { ...proj, layers };
@@ -201,7 +201,7 @@ export function WorkspaceProvider({ children }) {
 
       const { detectUnitsFromImage } = await import('../utils/autoPlot');
       const detectedPlots = await detectUnitsFromImage(floorPlanManagerRef.current, floorPlanId);
-      
+
       detectedPlots.forEach(plot => {
         const polyId = nextId('poly');
         const plotName = plot.id ? String(plot.id) : 'Unit ? (Manual)';
@@ -210,34 +210,41 @@ export function WorkspaceProvider({ children }) {
       setIsAutoPlotReviewMode(true);
     } catch (err) {
       console.error(err);
-      alert(err.message || String(err));
+      // OpenCV.js WASM builds sometimes throw a raw exception pointer (a
+      // plain number) instead of an Error — decode it into readable text
+      // so the user never sees a bare number like "294316".
+      let message;
+      if (typeof err === 'number' && typeof cv !== 'undefined' && cv.exceptionFromPtr) {
+        try { message = cv.exceptionFromPtr(err).msg; } catch (e) { /* fall through */ }
+      }
+      alert(message || err?.message || 'Auto-plot failed while analyzing this floor plan image.');
     }
   }, [activeLayerId]);
 
   const confirmAutoPlotUnits = useCallback(() => {
     const pm = polygonManagerRef.current;
     if (!pm) return;
-    
+
     const changedIds = [];
     pm.polygons.forEach(entry => {
       if (entry.category === 'pending-unit') {
         entry.category = 'unit';
         entry.color = '#ff6b6b';
         entry.gPolygon.setOptions({ strokeColor: '#ff6b6b', fillColor: '#ff6b6b' });
-        changedIds.push({ 
-          id: entry.id, 
-          path: entry.gPolygon.getPath().getArray().map(ll => ({lat: ll.lat(), lng: ll.lng()})), 
-          name: entry.name, 
+        changedIds.push({
+          id: entry.id,
+          path: entry.gPolygon.getPath().getArray().map(ll => ({ lat: ll.lat(), lng: ll.lng() })),
+          name: entry.name,
           layerId: entry.layerId,
           metadata: { ...entry.metadata }
         });
       }
     });
-    
+
     if (changedIds.length > 0) {
       pushThunk({
         undo: () => {
-          changedIds.forEach(({id}) => pm.deletePolygon(id, true));
+          changedIds.forEach(({ id }) => pm.deletePolygon(id, true));
           pm.callbacks.onChange && pm.callbacks.onChange();
         },
         redo: () => {
@@ -246,20 +253,20 @@ export function WorkspaceProvider({ children }) {
         }
       });
     }
-    
+
     setIsAutoPlotReviewMode(false);
   }, [pushThunk]);
 
   const cancelAutoPlotUnits = useCallback(() => {
     const pm = polygonManagerRef.current;
     if (!pm) return;
-    
+
     const toDelete = [];
     pm.polygons.forEach(entry => {
       if (entry.category === 'pending-unit') toDelete.push(entry.id);
     });
     toDelete.forEach(id => pm.deletePolygon(id, true));
-    
+
     setIsAutoPlotReviewMode(false);
   }, []);
 
