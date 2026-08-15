@@ -55,6 +55,9 @@ export function WorkspaceProvider({ children }) {
   const [selectedFloorPlanId, setSelectedFloorPlanId] = useState(null);
   const [selectedLayerItemId, setSelectedLayerItemId] = useState(null);
   const [snapToGrid, setSnapToGrid] = useState(false);
+  // Road selection — shared between MapWorkspace (popup) and LayersPanel (click-to-select)
+  const [selectedRoadEntry, setSelectedRoadEntry] = useState(null);
+  const [roadPopupPos, setRoadPopupPos] = useState(null);
   const [floorPlanMode, setFloorPlanMode] = useState('manual'); // 'manual' | 'gcp'
   const [gcpPoints, setGCPPoints] = useState([]); // { id, img: {x,y}, map: {lat,lng}, error }
   const [pendingImgPt, setPendingImgPt] = useState(null); // {x, y}
@@ -95,6 +98,8 @@ export function WorkspaceProvider({ children }) {
     setSelectedId(null);
     setSelectedFloorPlanId(null);
     setSelectedLayerItemId(null);
+    setSelectedRoadEntry(null);
+    setRoadPopupPos(null);
   }, []);
 
   // commitProject: updater fn or new project object — writes to history
@@ -177,12 +182,16 @@ export function WorkspaceProvider({ children }) {
   // Polygons live inside PolygonManager's own Map, not in `project` state
   // (avoids double undo-history entries). Anything that needs the FULL
   // project — save, export, project switch — must read through this.
-  const getExportProject = useCallback(() => ({
-    ...project,
-    polygons: polygonManagerRef.current?.getState() ?? [],
-    pins: pinManagerRef.current?.getState() ?? [],
-    floorPlans: floorPlanManagerRef.current?.getState() ?? [],
-  }), [project]);
+  const getExportProject = useCallback(() => {
+    const polyState = polygonManagerRef.current?.getState() || { polygons: [], roads: [] };
+    
+    return {
+      ...project,
+      ...polyState,
+      pins: pinManagerRef.current?.getState() ?? [],
+      floorPlans: floorPlanManagerRef.current?.getState() ?? [],
+    };
+  }, [project]);
 
   // ── Auto-Plot Units ────────────────────────────────────────────────────────
   const beginAutoPlotReview = useCallback(async (floorPlanId) => {
@@ -296,6 +305,10 @@ export function WorkspaceProvider({ children }) {
         setSelectedFloorPlanId,
         selectedLayerItemId,
         setSelectedLayerItemId,
+        selectedRoadEntry,
+        setSelectedRoadEntry,
+        roadPopupPos,
+        setRoadPopupPos,
         floorPlanMode,
         setFloorPlanMode,
         gcpPoints,

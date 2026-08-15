@@ -103,7 +103,7 @@ const PROJECT_TOOLS = [
 ];
 
 const LANDMARK_TOOLS = [
-  { id: 'road', label: 'Road', Icon: RoadIcon },
+  { id: 'road', label: 'Road', Icon: RoadIcon, premium: true },
   { id: 'radius', label: 'Radius', Icon: RadiusIcon },
 ];
 
@@ -145,11 +145,11 @@ const generateKMLString = (data, exportMode = 'kml') => {
   if (data.polygons) {
     data.polygons.forEach((poly, i) => {
       if (!poly.path || poly.path.length < 3) return;
-      
+
       let drawOrder = 1;
       let altitude = 0;
       let altMode = 'clampToGround';
-      
+
       if (poly.category === 'project') {
         altitude = 2;
         altMode = 'relativeToGround';
@@ -169,7 +169,7 @@ const generateKMLString = (data, exportMode = 'kml') => {
 
       // Use altitude offset for stacking priority
       const coords = [...poly.path, poly.path[0]].map(p => `${p.lng},${p.lat},${altitude}`).join(' ');
-      
+
       let styleStr = '';
       if (poly.color) {
         const hex = poly.color.replace('#', '');
@@ -195,7 +195,7 @@ const generateKMLString = (data, exportMode = 'kml') => {
 
       kml += `
     <Placemark>
-      <name>${poly.name || `Polygon ${i+1}`}</name>${styleStr}
+      <name>${poly.name || `Polygon ${i + 1}`}</name>${styleStr}
       <Polygon>
         <altitudeMode>${altMode}</altitudeMode>
         <gx:drawOrder>${drawOrder}</gx:drawOrder>
@@ -210,13 +210,55 @@ const generateKMLString = (data, exportMode = 'kml') => {
     });
   }
 
+  if (data.roads) {
+    data.roads.forEach((road, i) => {
+      const roadPath = road.points || road.path;
+      if (!roadPath || roadPath.length < 2) return;
+
+      const altMode = 'clampToGround';
+      const drawOrder = 2; // Matches landmark layer priority
+      const coords = roadPath.map(p => `${p.lng},${p.lat},0`).join(' ');
+
+      let styleStr = '';
+      const rColor = road.lineColor || road.color;
+      if (rColor) {
+        const hex = rColor.replace('#', '');
+        if (hex.length === 6) {
+          const r = hex.substring(0, 2);
+          const g = hex.substring(2, 4);
+          const b = hex.substring(4, 6);
+          const kmlLineColor = `ff${b}${g}${r}`;
+          const width = road.lineWidth || road.strokeWeight || 3;
+          styleStr = `
+      <Style>
+        <LineStyle>
+          <color>${kmlLineColor}</color>
+          <width>${width}</width>
+        </LineStyle>
+      </Style>`;
+        }
+      }
+
+      kml += `
+    <Placemark>
+      <name>${road.name || `Road ${i + 1}`}</name>${styleStr}
+      <LineString>
+        <tessellate>1</tessellate>
+        <altitudeMode>${altMode}</altitudeMode>
+        <gx:drawOrder>${drawOrder}</gx:drawOrder>
+        <coordinates>${coords}</coordinates>
+      </LineString>
+    </Placemark>`;
+    });
+  }
+
   if (data.pins) {
     data.pins.forEach((pin, i) => {
       if (!pin.position) return;
       let styleStr = '';
       if (pin.styleMode === 'custom' && pin.imageDataUrl) {
-         const href = (exportMode === 'kmz') ? `files/pin-${pin.id}.png` : pin.imageDataUrl;
-         styleStr = `
+        const href = (exportMode === 'kmz') ? `files/pin-${pin.id}.png` : pin.imageDataUrl;
+        styleStr = `
       <Style>
         <IconStyle>
           <Icon>
@@ -227,7 +269,7 @@ const generateKMLString = (data, exportMode = 'kml') => {
       }
       kml += `
     <Placemark>
-      <name>${pin.name || `Pin ${i+1}`}</name>${styleStr}
+      <name>${pin.name || `Pin ${i + 1}`}</name>${styleStr}
       <Point>
         <coordinates>${pin.position.lng},${pin.position.lat},0</coordinates>
       </Point>
@@ -235,19 +277,7 @@ const generateKMLString = (data, exportMode = 'kml') => {
     });
   }
 
-  if (data.roads) {
-    data.roads.forEach((road, i) => {
-      if (!road.points || road.points.length < 2) return;
-      const coords = road.points.map(p => `${p.lng},${p.lat},0`).join(' ');
-      kml += `
-    <Placemark>
-      <name>Road ${i+1}</name>
-      <LineString>
-        <coordinates>${coords}</coordinates>
-      </LineString>
-    </Placemark>`;
-    });
-  }
+
 
   if (data.radii) {
     data.radii.forEach((radius, i) => {
@@ -255,18 +285,18 @@ const generateKMLString = (data, exportMode = 'kml') => {
       radius.rings.forEach((ring, j) => {
         const distMeters = ring.distance;
         const coords = [];
-        for (let angle = 0; angle <= 360; angle += 360/64) {
-           const rad = angle * Math.PI / 180;
-           const earthRadius = 6378137;
-           const dLat = (distMeters * Math.cos(rad)) / earthRadius;
-           const dLng = (distMeters * Math.sin(rad)) / (earthRadius * Math.cos(radius.center.lat * Math.PI / 180));
-           const lat = radius.center.lat + (dLat * 180 / Math.PI);
-           const lng = radius.center.lng + (dLng * 180 / Math.PI);
-           coords.push(`${lng},${lat},0`);
+        for (let angle = 0; angle <= 360; angle += 360 / 64) {
+          const rad = angle * Math.PI / 180;
+          const earthRadius = 6378137;
+          const dLat = (distMeters * Math.cos(rad)) / earthRadius;
+          const dLng = (distMeters * Math.sin(rad)) / (earthRadius * Math.cos(radius.center.lat * Math.PI / 180));
+          const lat = radius.center.lat + (dLat * 180 / Math.PI);
+          const lng = radius.center.lng + (dLng * 180 / Math.PI);
+          coords.push(`${lng},${lat},0`);
         }
         kml += `
     <Placemark>
-      <name>Radius ${i+1} Ring ${j+1}</name>
+      <name>Radius ${i + 1} Ring ${j + 1}</name>
       <LineString>
         <coordinates>${coords.join(' ')}</coordinates>
       </LineString>
@@ -278,13 +308,13 @@ const generateKMLString = (data, exportMode = 'kml') => {
   if (data.floorPlans) {
     data.floorPlans.forEach((fp, i) => {
       if (!fp.bounds || !fp.corners) return;
-      const name = `Floor Plan ${i+1}`;
+      const name = `Floor Plan ${i + 1}`;
       let href = fp.floorplan;
       if (exportMode === 'kmz') href = `files/floorplan-${fp.id}.png`;
       else if (exportMode === 'zip') href = `floorplan-${fp.id}.png`;
-      
+
       const isDistorted = !!fp.distortedCorners;
-      
+
       if (exportMode === 'zip') {
         // Baked image is perfectly axis-aligned and unrotated.
         kml += `
@@ -343,7 +373,7 @@ const generateKMLString = (data, exportMode = 'kml') => {
 };
 
 export default function ToolPanel() {
-const {
+  const {
     activeProjectTool, setActiveProjectTool,
     activeLandmarkTool, setActiveLandmarkTool,
     snapToGrid, setSnapToGrid,
@@ -439,9 +469,9 @@ const {
     if (data.floorPlans && data.floorPlans.length > 0) {
       for (const fp of data.floorPlans) {
         if (!fp.floorplan) continue;
-        
+
         let img = floorPlanManagerRef.current?.overlays.get(fp.id)?.overlay?.imgEl;
-        
+
         // If we couldn't get the already-loaded image, load it fresh
         if (!img || !img.complete || img.naturalWidth === 0) {
           img = await new Promise((resolve, reject) => {
@@ -455,7 +485,7 @@ const {
             newImg.src = fp.floorplan;
           });
         }
-        
+
         if (img && img.naturalWidth > 0) {
           const bakedBlob = await bakeFloorplanImage(img, fp);
           if (bakedBlob) {
@@ -489,7 +519,7 @@ const {
     reader.onload = async (ev) => {
       try {
         const zip = await JSZip.loadAsync(ev.target.result);
-        
+
         let kmlFile = null;
         zip.forEach((relativePath, zipEntry) => {
           if (relativePath.toLowerCase().endsWith('.kml')) {
@@ -505,10 +535,10 @@ const {
         const kmlText = await kmlFile.async('string');
         const parser = new DOMParser();
         const doc = parser.parseFromString(kmlText, 'text/xml');
-        
+
         let minLat = 90, maxLat = -90, minLng = 180, maxLng = -180;
         let hasBounds = false;
-        
+
         const updateBounds = (lat, lng) => {
           if (lat < minLat) minLat = lat;
           if (lat > maxLat) maxLat = lat;
@@ -522,43 +552,43 @@ const {
           const go = groundOverlays[i];
           const href = go.getElementsByTagName('href')[0]?.textContent;
           let blobUrl = null;
-          
+
           if (href) {
-             const imageFile = zip.file(href);
-             if (imageFile) {
-               const imgBlob = await imageFile.async('blob');
-               blobUrl = URL.createObjectURL(imgBlob);
-             }
+            const imageFile = zip.file(href);
+            if (imageFile) {
+              const imgBlob = await imageFile.async('blob');
+              blobUrl = URL.createObjectURL(imgBlob);
+            }
           }
-          
+
           const latLonQuad = go.getElementsByTagName('gx:LatLonQuad')[0] || go.getElementsByTagName('LatLonQuad')[0];
           const latLonBox = go.getElementsByTagName('LatLonBox')[0];
           let corners = null;
           let distortedCorners = null;
           let bounds = null;
           let rotation = 0;
-          
+
           if (latLonQuad) {
             const coordsStr = latLonQuad.getElementsByTagName('coordinates')[0]?.textContent;
             if (coordsStr) {
-               const pts = coordsStr.trim().split(/\s+/).map(p => {
-                 const [lng, lat] = p.split(',').map(Number);
-                 return { lat, lng };
-               });
-               if (pts.length >= 4) {
-                 distortedCorners = { sw: pts[0], se: pts[1], ne: pts[2], nw: pts[3] };
-                 corners = distortedCorners;
-                 
-                 let minLatQ = 90, maxLatQ = -90, minLngQ = 180, maxLngQ = -180;
-                 pts.forEach(pt => {
-                   updateBounds(pt.lat, pt.lng);
-                   if (pt.lat < minLatQ) minLatQ = pt.lat;
-                   if (pt.lat > maxLatQ) maxLatQ = pt.lat;
-                   if (pt.lng < minLngQ) minLngQ = pt.lng;
-                   if (pt.lng > maxLngQ) maxLngQ = pt.lng;
-                 });
-                 bounds = { ne: { lat: maxLatQ, lng: maxLngQ }, sw: { lat: minLatQ, lng: minLngQ } };
-               }
+              const pts = coordsStr.trim().split(/\s+/).map(p => {
+                const [lng, lat] = p.split(',').map(Number);
+                return { lat, lng };
+              });
+              if (pts.length >= 4) {
+                distortedCorners = { sw: pts[0], se: pts[1], ne: pts[2], nw: pts[3] };
+                corners = distortedCorners;
+
+                let minLatQ = 90, maxLatQ = -90, minLngQ = 180, maxLngQ = -180;
+                pts.forEach(pt => {
+                  updateBounds(pt.lat, pt.lng);
+                  if (pt.lat < minLatQ) minLatQ = pt.lat;
+                  if (pt.lat > maxLatQ) maxLatQ = pt.lat;
+                  if (pt.lng < minLngQ) minLngQ = pt.lng;
+                  if (pt.lng > maxLngQ) maxLngQ = pt.lng;
+                });
+                bounds = { ne: { lat: maxLatQ, lng: maxLngQ }, sw: { lat: minLatQ, lng: minLngQ } };
+              }
             }
           } else if (latLonBox) {
             const n = parseFloat(latLonBox.getElementsByTagName('north')[0]?.textContent || 0);
@@ -566,13 +596,13 @@ const {
             const e = parseFloat(latLonBox.getElementsByTagName('east')[0]?.textContent || 0);
             const w = parseFloat(latLonBox.getElementsByTagName('west')[0]?.textContent || 0);
             rotation = parseFloat(latLonBox.getElementsByTagName('rotation')[0]?.textContent || 0);
-            
+
             bounds = { ne: { lat: n, lng: e }, sw: { lat: s, lng: w } };
-            corners = { sw: {lat: s, lng: w}, se: {lat: s, lng: e}, ne: {lat: n, lng: e}, nw: {lat: n, lng: w} };
+            corners = { sw: { lat: s, lng: w }, se: { lat: s, lng: e }, ne: { lat: n, lng: e }, nw: { lat: n, lng: w } };
             updateBounds(n, e);
             updateBounds(s, w);
           }
-          
+
           if (blobUrl && corners && floorPlanManagerRef.current) {
             const id = 'fp-' + Date.now() + '-' + i;
             floorPlanManagerRef.current.loadFloorPlan(id, {
@@ -586,65 +616,85 @@ const {
             });
           }
         }
-        
+
         const placemarks = doc.getElementsByTagName('Placemark');
         for (let i = 0; i < placemarks.length; i++) {
           const pm = placemarks[i];
           const name = pm.getElementsByTagName('name')[0]?.textContent || `Imported ${i}`;
-          
+
           const polygon = pm.getElementsByTagName('Polygon')[0];
           if (polygon) {
             const coordsStr = polygon.getElementsByTagName('coordinates')[0]?.textContent;
             if (coordsStr) {
-               const path = coordsStr.trim().split(/\s+/).filter(Boolean).map(p => {
-                 const [lng, lat] = p.split(',').map(Number);
-                 if (!isNaN(lat) && !isNaN(lng)) updateBounds(lat, lng);
-                 return { lat, lng };
-               }).filter(p => !isNaN(p.lat) && !isNaN(p.lng));
-               
-               if (path.length > 0) {
-                 const altMode = polygon.getElementsByTagName('altitudeMode')[0]?.textContent;
-                 const drawOrder = parseInt(polygon.getElementsByTagName('gx:drawOrder')[0]?.textContent || '1');
-                 let category = 'project';
-                 if (altMode === 'relativeToGround' && drawOrder === 2) category = 'landmark';
-                 else if (altMode === 'relativeToGround' && drawOrder === 3) category = 'unit';
-                 else if (altMode === 'relativeToGround' && drawOrder === 4) category = 'pending-unit';
-                 
-                 const id = 'poly-' + Date.now() + '-' + i;
-                 polygonManagerRef.current?.loadPolygon({
-                   id, name, category, path, color: '#ff6b6b'
-                 });
-               }
+              const path = coordsStr.trim().split(/\s+/).filter(Boolean).map(p => {
+                const [lng, lat] = p.split(',').map(Number);
+                if (!isNaN(lat) && !isNaN(lng)) updateBounds(lat, lng);
+                return { lat, lng };
+              }).filter(p => !isNaN(p.lat) && !isNaN(p.lng));
+
+              if (path.length > 0) {
+                const altMode = polygon.getElementsByTagName('altitudeMode')[0]?.textContent;
+                const drawOrder = parseInt(polygon.getElementsByTagName('gx:drawOrder')[0]?.textContent || '1');
+                let category = 'project';
+                if (altMode === 'relativeToGround' && drawOrder === 2) category = 'landmark';
+                else if (altMode === 'relativeToGround' && drawOrder === 3) category = 'unit';
+                else if (altMode === 'relativeToGround' && drawOrder === 4) category = 'pending-unit';
+
+                const id = 'poly-' + Date.now() + '-' + i;
+                polygonManagerRef.current?.loadPolygon({
+                  id, name, category, path, color: '#ff6b6b'
+                });
+              }
             }
           }
-          
+
+          const lineString = pm.getElementsByTagName('LineString')[0];
+          if (lineString) {
+            const coordsStr = lineString.getElementsByTagName('coordinates')[0]?.textContent;
+            if (coordsStr) {
+              const path = coordsStr.trim().split(/\s+/).filter(Boolean).map(p => {
+                const [lng, lat] = p.split(',').map(Number);
+                if (!isNaN(lat) && !isNaN(lng)) updateBounds(lat, lng);
+                return { lat, lng };
+              }).filter(p => !isNaN(p.lat) && !isNaN(p.lng));
+
+              if (path.length > 0) {
+                const id = 'road-' + Date.now() + '-' + i;
+                // Parse color/width if present in style, else default
+                polygonManagerRef.current?.loadPolygon({
+                  id, name, category: 'road', path, color: '#FF9800', strokeWeight: 3
+                });
+              }
+            }
+          }
+
           const point = pm.getElementsByTagName('Point')[0];
           if (point) {
             const coordsStr = point.getElementsByTagName('coordinates')[0]?.textContent;
             if (coordsStr) {
-               const [lng, lat] = coordsStr.trim().split(',').map(Number);
-               if (!isNaN(lat) && !isNaN(lng)) {
-                 updateBounds(lat, lng);
-                 
-                 let imageDataUrl = null;
-                 const href = pm.getElementsByTagName('href')[0]?.textContent;
-                 if (href) {
-                   const imageFile = zip.file(href);
-                   if (imageFile) {
-                     const imgBlob = await imageFile.async('blob');
-                     imageDataUrl = URL.createObjectURL(imgBlob);
-                   }
-                 }
-                 
-                 const id = 'pin-' + Date.now() + '-' + i;
-                 pinManagerRef.current?.loadPin({
-                   id, name, position: {lat, lng}, styleMode: imageDataUrl ? 'custom' : 'default', imageDataUrl
-                 });
-               }
+              const [lng, lat] = coordsStr.trim().split(',').map(Number);
+              if (!isNaN(lat) && !isNaN(lng)) {
+                updateBounds(lat, lng);
+
+                let imageDataUrl = null;
+                const href = pm.getElementsByTagName('href')[0]?.textContent;
+                if (href) {
+                  const imageFile = zip.file(href);
+                  if (imageFile) {
+                    const imgBlob = await imageFile.async('blob');
+                    imageDataUrl = URL.createObjectURL(imgBlob);
+                  }
+                }
+
+                const id = 'pin-' + Date.now() + '-' + i;
+                pinManagerRef.current?.loadPin({
+                  id, name, position: { lat, lng }, styleMode: imageDataUrl ? 'custom' : 'default', imageDataUrl
+                });
+              }
             }
           }
         }
-        
+
         const map = polygonManagerRef.current?.map || floorPlanManagerRef.current?.map;
         if (map && window.google?.maps) {
           const lookAt = doc.getElementsByTagName('LookAt')[0];
@@ -653,7 +703,7 @@ const {
           if (viewNode) {
             const lat = parseFloat(viewNode.getElementsByTagName('latitude')[0]?.textContent || 0);
             const lng = parseFloat(viewNode.getElementsByTagName('longitude')[0]?.textContent || 0);
-            map.panTo({lat, lng});
+            map.panTo({ lat, lng });
           } else if (hasBounds) {
             const bnd = new window.google.maps.LatLngBounds(
               new window.google.maps.LatLng(minLat, minLng),
@@ -662,12 +712,12 @@ const {
             map.fitBounds(bnd);
           }
         }
-        
+
       } catch (e) {
         console.error("KMZ import failed", e);
         alert("Failed to import KMZ");
       }
-      
+
       e.target.value = null;
     };
     reader.readAsArrayBuffer(file);
@@ -706,33 +756,33 @@ const {
       let areaSqMeters = 0;
       let lengthStr = "";
       let widthStr = "";
-      
+
       if (p.path && p.path.length >= 3 && window.google?.maps?.geometry?.spherical) {
         const latLngs = p.path.map(pt => new window.google.maps.LatLng(pt.lat, pt.lng));
         areaSqMeters = polygonArea(latLngs);
-        
+
         if (p.path.length === 4) {
           const d1 = window.google.maps.geometry.spherical.computeDistanceBetween(latLngs[0], latLngs[1]);
           const d2 = window.google.maps.geometry.spherical.computeDistanceBetween(latLngs[1], latLngs[2]);
           const d3 = window.google.maps.geometry.spherical.computeDistanceBetween(latLngs[2], latLngs[3]);
           const d4 = window.google.maps.geometry.spherical.computeDistanceBetween(latLngs[3], latLngs[0]);
-          
+
           const maxL = Math.max(d1, d3);
           const maxW = Math.max(d2, d4);
           const formatFeet = (meters) => {
-             const totalInches = meters * 39.3701;
-             const feet = Math.floor(totalInches / 12);
-             const inches = Math.round(totalInches % 12);
-             return `${feet}'${inches}`;
+            const totalInches = meters * 39.3701;
+            const feet = Math.floor(totalInches / 12);
+            const inches = Math.round(totalInches % 12);
+            return `${feet}'${inches}`;
           };
-          
+
           lengthStr = formatFeet(Math.max(maxL, maxW));
           widthStr = formatFeet(Math.min(maxL, maxW));
         }
       }
-      
+
       const sqyd = areaSqMeters > 0 ? (areaSqMeters * 1.19599).toFixed(2) : 0;
-      
+
       return {
         id: isNaN(parseInt(p.name, 10)) ? p.name : parseInt(p.name, 10),
         sqyd: Number(sqyd),
@@ -906,12 +956,12 @@ const {
       {saveDialogOpen && <SaveProjectDialog onClose={() => setSaveDialogOpen(false)} />}
       {openDialogOpen && <OpenProjectDialog onClose={() => setOpenDialogOpen(false)} />}
 
-      <input 
-        type="file" 
-        id="kmz-upload-input" 
-        accept=".kmz" 
-        style={{ display: 'none' }} 
-        onChange={handleImportKMZ} 
+      <input
+        type="file"
+        id="kmz-upload-input"
+        accept=".kmz"
+        style={{ display: 'none' }}
+        onChange={handleImportKMZ}
       />
     </div>
   );

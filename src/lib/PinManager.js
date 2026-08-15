@@ -230,6 +230,43 @@ export default class PinManager {
         this.callbacks.onChange && this.callbacks.onChange();
     }
 
+    reorder(draggedId, targetId) {
+        if (draggedId === targetId) return;
+        const draggedEntry = this.pins.get(draggedId);
+        const targetEntry = this.pins.get(targetId);
+        if (!draggedEntry || !targetEntry) return;
+
+        if (draggedEntry.layerId !== targetEntry.layerId) return;
+
+        const keys = Array.from(this.pins.keys());
+        const draggedIdx = keys.indexOf(draggedId);
+        const targetIdx = keys.indexOf(targetId);
+
+        if (draggedIdx === -1 || targetIdx === -1) return;
+
+        keys.splice(draggedIdx, 1);
+        const newTargetIdx = keys.indexOf(targetId);
+        
+        if (draggedIdx < targetIdx) {
+            keys.splice(newTargetIdx + 1, 0, draggedId);
+        } else {
+            keys.splice(newTargetIdx, 0, draggedId);
+        }
+
+        const newMap = new Map();
+        for (const key of keys) {
+            newMap.set(key, this.pins.get(key));
+        }
+        this.pins = newMap;
+        
+        let zIdxCounter = 100;
+        for (const entry of this.pins.values()) {
+            entry.marker.setOptions({ zIndex: ++zIdxCounter });
+        }
+
+        this.callbacks.onChange && this.callbacks.onChange();
+    }
+
     // Real, exact geo-coord straight off the live marker — not derived/estimated.
     getCoords(id) {
         const entry = this.pins.get(id);

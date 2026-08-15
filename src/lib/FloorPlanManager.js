@@ -458,6 +458,7 @@ export default class FloorPlanManager {
           entry.overlay.setMap(null);
           this.overlays.delete(id);
           if (this.selectedId === id) this.selectedId = null;
+          this.callbacks.onDelete && this.callbacks.onDelete(id);
           this.callbacks.onChange && this.callbacks.onChange();
         }
       });
@@ -466,6 +467,45 @@ export default class FloorPlanManager {
     entry.overlay.setMap(null);
     this.overlays.delete(id);
     if (this.selectedId === id) this.selectedId = null;
+    this.callbacks.onDelete && this.callbacks.onDelete(id);
+    this.callbacks.onChange && this.callbacks.onChange();
+  }
+
+  reorder(draggedId, targetId) {
+    if (draggedId === targetId) return;
+    const draggedEntry = this.overlays.get(draggedId);
+    const targetEntry = this.overlays.get(targetId);
+    if (!draggedEntry || !targetEntry) return;
+
+    if (draggedEntry.layerId !== targetEntry.layerId) return;
+
+    const keys = Array.from(this.overlays.keys());
+    const draggedIdx = keys.indexOf(draggedId);
+    const targetIdx = keys.indexOf(targetId);
+
+    if (draggedIdx === -1 || targetIdx === -1) return;
+
+    keys.splice(draggedIdx, 1);
+    const newTargetIdx = keys.indexOf(targetId);
+    
+    if (draggedIdx < targetIdx) {
+      keys.splice(newTargetIdx + 1, 0, draggedId);
+    } else {
+      keys.splice(newTargetIdx, 0, draggedId);
+    }
+
+    const newMap = new Map();
+    for (const key of keys) {
+      newMap.set(key, this.overlays.get(key));
+    }
+    this.overlays = newMap;
+    
+    // Reverse iterate so top items get higher z-indexes
+    let zIdxCounter = 0;
+    for (const entry of this.overlays.values()) {
+        entry.overlay.update({ zIndex: ++zIdxCounter });
+    }
+
     this.callbacks.onChange && this.callbacks.onChange();
   }
 
@@ -561,5 +601,36 @@ export default class FloorPlanManager {
     a.download = `floorplan-${id}.json`;
     a.click();
     URL.revokeObjectURL(url);
+  }
+
+  rename(id, name) {
+    const entry = this.overlays.get(id);
+    if (!entry) return;
+    entry.name = name;
+    this.callbacks.onChange && this.callbacks.onChange();
+  }
+
+  async replaceImage(id, newUrl) {
+    return new Promise((resolve, reject) => {
+      const entry = this.overlays.get(id);
+      if (!entry) return reject(new Error('Floor plan not found'));
+
+      const img = new Image();
+      img.crossOrigin = 'anonymous';
+      img.onload = () => {
+        entry.url = newUrl;
+        entry.imgEl = img;
+        
+        if (entry.overlay && entry.overlay.img) {
+          entry.overlay.url = newUrl;
+          entry.overlay.img.src = newUrl;
+        }
+
+        this.callbacks.onChange && this.callbacks.onChange();
+        resolve(id);
+      };
+      img.onerror = reject;
+      img.src = newUrl;
+    });
   }
 }

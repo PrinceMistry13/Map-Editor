@@ -26,6 +26,12 @@ const EyeOffIcon = () => (
   </svg>
 );
 
+const PencilIcon = () => (
+  <svg viewBox="0 0 24 24" width="12" height="12" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+    <path d="M17 3a2.828 2.828 0 1 1 4 4L7.5 20.5 2 22l1.5-5.5L17 3z"></path>
+  </svg>
+);
+
 const MoreIcon = () => (
   <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
     <circle cx="12" cy="12" r="1"></circle>
@@ -64,6 +70,14 @@ const PinIcon = () => (
   </svg>
 );
 
+const RoadIcon = () => (
+  <svg viewBox="0 0 24 24" width="12" height="12" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+    <path d="M4 20 C7 16 9 13 12 12 C15 11 17 8 20 4" />
+    <circle cx="4" cy="20" r="1.5" fill="currentColor" stroke="none" />
+    <circle cx="20" cy="4" r="1.5" fill="currentColor" stroke="none" />
+  </svg>
+);
+
 const FloorPlanIcon = () => (
   <svg viewBox="0 0 24 24" width="12" height="12" fill="none" stroke="currentColor" strokeWidth="2">
     <rect x="3" y="3" width="18" height="18" rx="2" />
@@ -80,19 +94,36 @@ export default function LayersPanel({ tick = 0 }) {
     polygonManagerRef, pinManagerRef, floorPlanManagerRef,
     getExportProject,
     selectedLayerItemId, setSelectedLayerItemId,
+    selectedRoadEntry, setSelectedRoadEntry, setRoadPopupPos,
   } = useWorkspace();
 
   const [expandedLayers, setExpandedLayers] = useState({});
   const [menuOpenId, setMenuOpenId] = useState(null);
+  const [editingLayerId, setEditingLayerId] = useState(null);
+  const [tempLayerName, setTempLayerName] = useState("");
   
-  
+  const replaceFileRef = useRef(null);
+  const [replacingFloorPlanId, setReplacingFloorPlanId] = useState(null);
+
+  const handleReplaceFile = (e) => {
+    const file = e.target.files?.[0];
+    if (!file || !replacingFloorPlanId) return;
+    const url = URL.createObjectURL(file);
+    if (floorPlanManagerRef.current) {
+      floorPlanManagerRef.current.replaceImage(replacingFloorPlanId, url).catch(err => console.error(err));
+    }
+    setReplacingFloorPlanId(null);
+    e.target.value = '';
+  };
+
+
   // Multi-select state
   const [multiSelectedIds, setMultiSelectedIds] = useState(new Set());
   const [lastClickedId, setLastClickedId] = useState(null);
 
   // Close menu when clicking outside
   useEffect(() => {
-    const handleDocClick = () => { setMenuOpenId(null);  };
+    const handleDocClick = () => { setMenuOpenId(null); };
     document.addEventListener('click', handleDocClick);
     return () => document.removeEventListener('click', handleDocClick);
   }, []);
@@ -113,12 +144,12 @@ export default function LayersPanel({ tick = 0 }) {
   const handleMenuClick = (id, e) => {
     e.stopPropagation();
     setMenuOpenId(prev => (prev === id ? null : id));
-    
+
   };
 
   const handleStyleMenuClick = (id, e) => {
     e.stopPropagation();
-    
+
     setMenuOpenId(null);
   };
 
@@ -171,31 +202,67 @@ export default function LayersPanel({ tick = 0 }) {
     setMenuOpenId(null);
   };
 
-  // Drag & drop sorting
-  const [draggedId, setDraggedId] = useState(null);
+  // Drag & drop sorting using refs to prevent re-renders breaking the drag
+  const draggedIdRef = useRef(null);
 
   const handleDragStart = (e, id) => {
-    setDraggedId(id);
+    e.stopPropagation();
+    draggedIdRef.current = id;
     e.dataTransfer.effectAllowed = "move";
+    e.dataTransfer.setData('text/plain', id);
   };
   const handleDragOver = (e) => {
     e.preventDefault(); // allow drop
+    e.dataTransfer.dropEffect = 'move';
   };
   const handleDrop = (e, targetId) => {
     e.preventDefault();
+    e.stopPropagation();
+    const draggedId = draggedIdRef.current;
     if (draggedId && draggedId !== targetId) {
       reorderLayers(draggedId, targetId);
     }
-    setDraggedId(null);
+    draggedIdRef.current = null;
   };
 
+  const draggedItemIdRef = useRef(null);
+  const draggedItemTypeRef = useRef(null);
+
+  const handleItemDragStart = (e, id, type) => {
+    e.stopPropagation();
+    draggedItemIdRef.current = id;
+    draggedItemTypeRef.current = type;
+    e.dataTransfer.effectAllowed = "move";
+    e.dataTransfer.setData('text/plain', id);
+  };
+  const handleItemDrop = (e, targetId, targetType) => {
+    e.preventDefault();
+    e.stopPropagation();
+    const draggedItemId = draggedItemIdRef.current;
+    const draggedItemType = draggedItemTypeRef.current;
+    if (draggedItemId && draggedItemId !== targetId && draggedItemType === targetType) {
+      if ((draggedItemType === 'polygon' || draggedItemType === 'road') && polygonManagerRef.current) {
+        polygonManagerRef.current.reorder(draggedItemId, targetId);
+      } else if (draggedItemType === 'pin' && pinManagerRef.current) {
+        pinManagerRef.current.reorder(draggedItemId, targetId);
+      } else if (draggedItemType === 'floorplan' && floorPlanManagerRef.current) {
+        floorPlanManagerRef.current.reorder(draggedItemId, targetId);
+      }
+    }
+    draggedItemIdRef.current = null;
+    draggedItemTypeRef.current = null;
+  };
+
+
   // Derive active items for selecting children
-  const pmState = polygonManagerRef.current?.getState() || [];
+  const _pmRaw = polygonManagerRef.current?.getState();
+  const pmState = _pmRaw ? (Array.isArray(_pmRaw) ? _pmRaw : [...(_pmRaw.polygons || []), ...(_pmRaw.roads || [])]) : [];
   const pnmState = pinManagerRef.current?.getState() || [];
   const fpState = floorPlanManagerRef.current?.getState() || [];
 
   const getLayerChildren = (layerId) => {
-    const polys = pmState.filter(f => f.layerId === layerId && f.category !== 'landmark').map(f => ({ ...f, type: 'polygon' }));
+    // Roads are now considered Landmarks and bypass regular layer tree sorting
+    const polys = pmState.filter(f => f.layerId === layerId && f.category !== 'landmark' && f.category !== 'road' && f.category !== 'bridge').map(f => ({ ...f, type: 'polygon' }));
     const pins = pnmState.filter(f => f.layerId === layerId).map(f => ({ ...f, type: 'pin' }));
     const fps = fpState.filter(f => f.layerId === layerId).map(f => ({ ...f, type: 'floorplan' }));
     return [...fps, ...polys, ...pins];
@@ -205,8 +272,8 @@ export default function LayersPanel({ tick = 0 }) {
 
   // Flatten all children to support shift-click
   const allRenderedChildren = [];
-  
-  const landmarkPolys = pmState.filter(f => f.category === 'landmark').map(f => ({ ...f, type: 'polygon' }));
+
+  const landmarkPolys = pmState.filter(f => f.category === 'landmark' || f.category === 'road' || f.category === 'bridge').map(f => ({ ...f, type: (f.category === 'road' || f.category === 'bridge') ? 'road' : 'polygon' }));
   if (expandedLayers['landmarks']) {
     allRenderedChildren.push(...landmarkPolys);
   }
@@ -217,7 +284,7 @@ export default function LayersPanel({ tick = 0 }) {
       const fps = children.filter(c => c.type === 'floorplan');
       const rootPolys = children.filter(c => c.type === 'polygon' && !c.metadata?.floorPlanId);
       const pins = children.filter(c => c.type === 'pin');
-      
+
       fps.forEach(fp => {
         if (expandedLayers[`folder-${fp.id}`]) {
           allRenderedChildren.push(fp);
@@ -248,7 +315,7 @@ export default function LayersPanel({ tick = 0 }) {
   const handleChildClick = (e, layerId, child) => {
     e.stopPropagation();
     handleLayerClick(layerId);
-    
+
     if (e.shiftKey && lastClickedId) {
       const idx1 = allRenderedChildren.findIndex(c => c.id === lastClickedId);
       const idx2 = allRenderedChildren.findIndex(c => c.id === child.id);
@@ -256,7 +323,7 @@ export default function LayersPanel({ tick = 0 }) {
         const min = Math.min(idx1, idx2);
         const max = Math.max(idx1, idx2);
         const newSet = new Set(multiSelectedIds);
-        for(let i = min; i <= max; i++) {
+        for (let i = min; i <= max; i++) {
           newSet.add(allRenderedChildren[i].id);
         }
         setMultiSelectedIds(newSet);
@@ -279,11 +346,11 @@ export default function LayersPanel({ tick = 0 }) {
     e.stopPropagation();
 
     if (isBulk === 'landmarks') {
-      const landmarkPolys = pmState.filter(f => f.category === 'landmark');
+      const landmarkPolys = pmState.filter(f => f.category === 'landmark' || f.category === 'road' || f.category === 'bridge');
       const newState = !landmarkPolys.every(p => p.visible !== false);
       landmarkPolys.forEach(p => {
-         const entry = polygonManagerRef.current?.polygons.get(p.id);
-         if (entry) entry.itemVisible = newState;
+        const entry = polygonManagerRef.current?.polygons.get(p.id);
+        if (entry) entry.itemVisible = newState;
       });
       if (polygonManagerRef.current) polygonManagerRef.current.callbacks.onChange();
       return;
@@ -293,8 +360,8 @@ export default function LayersPanel({ tick = 0 }) {
       const plots = getLayerChildren(child.layerId).filter(c => c.type === 'polygon' && c.metadata?.floorPlanId === child.id && (c.category === 'unit' || c.category === 'pending-unit'));
       const newState = !plots.every(p => p.visible !== false);
       plots.forEach(p => {
-         const entry = polygonManagerRef.current?.polygons.get(p.id);
-         if (entry) entry.itemVisible = newState;
+        const entry = polygonManagerRef.current?.polygons.get(p.id);
+        if (entry) entry.itemVisible = newState;
       });
       if (polygonManagerRef.current) polygonManagerRef.current.callbacks.onChange();
       return;
@@ -302,36 +369,36 @@ export default function LayersPanel({ tick = 0 }) {
 
     const isMulti = child ? (multiSelectedIds.has(child.id) && multiSelectedIds.size > 1) : false;
     const targetIds = isMulti ? Array.from(multiSelectedIds) : [child?.id].filter(Boolean);
-    
+
     if (!child) return;
     const newState = child.visible === false ? true : false;
-    
+
     let allTargetIds = [...targetIds];
     if (isBulk === true) {
       targetIds.forEach(id => {
-         const fp = floorPlanManagerRef.current?.getState().find(f => f.id === id);
-         if (fp) {
-           const childrenOfFp = getLayerChildren(fp.layerId || child.layerId).filter(c => c.type === 'polygon' && c.metadata?.floorPlanId === id);
-           allTargetIds.push(...childrenOfFp.map(c => c.id));
-         }
+        const fp = floorPlanManagerRef.current?.getState().find(f => f.id === id);
+        if (fp) {
+          const childrenOfFp = getLayerChildren(fp.layerId || child.layerId).filter(c => c.type === 'polygon' && c.metadata?.floorPlanId === id);
+          allTargetIds.push(...childrenOfFp.map(c => c.id));
+        }
       });
     }
 
     allTargetIds.forEach(id => {
-       if (polygonManagerRef.current?.polygons.has(id)) {
-           const entry = polygonManagerRef.current.polygons.get(id);
-           entry.itemVisible = newState;
-       }
-       if (pinManagerRef.current?.pins.has(id)) {
-           const entry = pinManagerRef.current.pins.get(id);
-           entry.itemVisible = newState;
-       }
-       if (floorPlanManagerRef.current?.overlays.has(id)) {
-           const entry = floorPlanManagerRef.current.overlays.get(id);
-           entry.itemVisible = newState;
-       }
+      if (polygonManagerRef.current?.polygons.has(id)) {
+        const entry = polygonManagerRef.current.polygons.get(id);
+        entry.itemVisible = newState;
+      }
+      if (pinManagerRef.current?.pins.has(id)) {
+        const entry = pinManagerRef.current.pins.get(id);
+        entry.itemVisible = newState;
+      }
+      if (floorPlanManagerRef.current?.overlays.has(id)) {
+        const entry = floorPlanManagerRef.current.overlays.get(id);
+        entry.itemVisible = newState;
+      }
     });
-    
+
     if (polygonManagerRef.current) polygonManagerRef.current.callbacks.onChange();
     if (pinManagerRef.current) pinManagerRef.current.callbacks.onChange();
     if (floorPlanManagerRef.current) floorPlanManagerRef.current.callbacks.onChange();
@@ -352,7 +419,7 @@ export default function LayersPanel({ tick = 0 }) {
 
     if (isUniform) {
       children.forEach(child => {
-        if (child.type === 'polygon' && polygonManagerRef.current) polygonManagerRef.current.setUniformColor(child.id, color);
+        if ((child.type === 'polygon' || child.type === 'road') && polygonManagerRef.current) polygonManagerRef.current.setUniformColor(child.id, color);
         if (child.type === 'pin' && pinManagerRef.current) pinManagerRef.current.setUniformColor(child.id, color);
       });
     }
@@ -361,11 +428,11 @@ export default function LayersPanel({ tick = 0 }) {
   const handleStyleModeToggle = (id, isLayer, newMode, color, children) => {
     let oldMode = 'individual';
     if (isLayer) {
-       const l = project?.layers?.find(ll => ll.id === id);
-       if (l) oldMode = l.styleMode || 'individual';
+      const l = project?.layers?.find(ll => ll.id === id);
+      if (l) oldMode = l.styleMode || 'individual';
     } else {
-       const s = project?.folderSettings?.[id];
-       if (s) oldMode = s.styleMode || 'individual';
+      const s = project?.folderSettings?.[id];
+      if (s) oldMode = s.styleMode || 'individual';
     }
     if (oldMode === newMode) return;
 
@@ -374,22 +441,22 @@ export default function LayersPanel({ tick = 0 }) {
 
     if (newMode === 'uniform') {
       children.forEach(child => {
-        if (child.type === 'polygon' && polygonManagerRef.current) polygonManagerRef.current.setUniformColor(child.id, color);
+        if ((child.type === 'polygon' || child.type === 'road') && polygonManagerRef.current) polygonManagerRef.current.setUniformColor(child.id, color);
         if (child.type === 'pin' && pinManagerRef.current) pinManagerRef.current.setUniformColor(child.id, color);
       });
     } else {
       children.forEach(child => {
-        if (child.type === 'polygon' && polygonManagerRef.current) polygonManagerRef.current.restoreOriginalColor(child.id);
+        if ((child.type === 'polygon' || child.type === 'road') && polygonManagerRef.current) polygonManagerRef.current.restoreOriginalColor(child.id);
         if (child.type === 'pin' && pinManagerRef.current) pinManagerRef.current.restoreOriginalColor(child.id);
       });
     }
-    
+
   };
 
   const selectChild = (child) => {
     const map = polygonManagerRef.current?.map || pinManagerRef.current?.map || floorPlanManagerRef.current?.map;
 
-    if (child.type === 'polygon' && polygonManagerRef.current) {
+    if ((child.type === 'polygon' || child.type === 'road') && polygonManagerRef.current) {
       polygonManagerRef.current.select(child.id);
       if (map) {
         const entry = polygonManagerRef.current.polygons.get(child.id);
@@ -432,6 +499,10 @@ export default function LayersPanel({ tick = 0 }) {
           className={`lp-child-item ${isChildSelected ? 'lp-child-item--active' : ''}`}
           onClick={(e) => handleChildClick(e, layerId, child)}
           style={{ paddingLeft: isDeeplyNested ? 40 : (isNested ? 24 : 8), paddingRight: 4 }}
+          draggable
+          onDragStart={(e) => handleItemDragStart(e, child.id, child.type)}
+          onDragOver={handleDragOver}
+          onDrop={(e) => handleItemDrop(e, child.id, child.type)}
         >
           <button
             className={`lp-toggle-btn ${child.visible === false ? 'lp-toggle-btn--hidden' : ''}`}
@@ -445,16 +516,79 @@ export default function LayersPanel({ tick = 0 }) {
             {child.type === 'polygon' && <PolygonIcon />}
             {child.type === 'pin' && <PinIcon />}
             {child.type === 'floorplan' && <FloorPlanIcon />}
+            {child.type === 'road' && <RoadIcon />}
           </div>
-          <div className="lp-child-name" title={child.name || child.id}>
-            {child.name || (child.type === 'floorplan' ? 'Floor Plan Overlay' : child.id)}
-          </div>
+          {editingLayerId === child.id && child.type === 'floorplan' ? (
+            <input
+              type="text"
+              className="lp-name-input"
+              value={tempLayerName}
+              autoFocus
+              style={{ flex: 1 }}
+              onChange={(e) => setTempLayerName(e.target.value)}
+              onClick={(e) => e.stopPropagation()}
+              onKeyDown={(e) => {
+                e.stopPropagation();
+                if (e.key === 'Enter') {
+                  if (floorPlanManagerRef.current) floorPlanManagerRef.current.rename(child.id, tempLayerName);
+                  setEditingLayerId(null);
+                } else if (e.key === 'Escape') {
+                  setEditingLayerId(null);
+                }
+              }}
+              onBlur={() => {
+                if (floorPlanManagerRef.current) floorPlanManagerRef.current.rename(child.id, tempLayerName);
+                setEditingLayerId(null);
+              }}
+            />
+          ) : (
+            <>
+              <div className="lp-child-name" title={child.name || child.id}>
+                {child.name || (child.type === 'floorplan' ? 'Floor Plan Overlay' : child.id)}
+              </div>
+              {child.type === 'floorplan' && (
+                <div className="lp-menu-wrap" style={{ marginLeft: 4 }}>
+                  <button
+                    className="lp-child-edit-btn"
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      setMenuOpenId(prev => prev === `fp-menu-${child.id}` ? null : `fp-menu-${child.id}`);
+                    }}
+                    title="Options"
+                  >
+                    <MoreIcon />
+                  </button>
+                  {menuOpenId === `fp-menu-${child.id}` && (
+                    <div className="lp-dropdown">
+                      <button className="lp-dropdown-item" onClick={(e) => {
+                        e.stopPropagation();
+                        setMenuOpenId(null);
+                        setReplacingFloorPlanId(child.id);
+                        if (replaceFileRef.current) replaceFileRef.current.click();
+                      }}>Replace</button>
+                      <button className="lp-dropdown-item" onClick={(e) => {
+                        e.stopPropagation();
+                        setMenuOpenId(null);
+                        alert('Add Floor feature needs specification');
+                      }}>Add Floor</button>
+                      <button className="lp-dropdown-item" onClick={(e) => {
+                        e.stopPropagation();
+                        setMenuOpenId(null);
+                        setEditingLayerId(child.id);
+                        setTempLayerName(child.name || 'Floor Plan Overlay');
+                      }}>Rename</button>
+                    </div>
+                  )}
+                </div>
+              )}
+            </>
+          )}
           {!isUniformParent && (!layerObj || layerObj.styleMode !== 'uniform') && child.type !== 'floorplan' && (
             <div className="lp-child-swatch-wrap">
               <ColorPickerPopover
-                color={child.color || '#00d4ff'}
+                color={child.color || child.lineColor || '#00d4ff'}
                 onChange={(c) => {
-                  if (child.type === 'polygon' && polygonManagerRef.current) {
+                  if ((child.type === 'polygon' || child.type === 'road') && polygonManagerRef.current) {
                     polygonManagerRef.current.setColor(child.id, c);
                   }
                   if (child.type === 'pin' && pinManagerRef.current) {
@@ -483,6 +617,13 @@ export default function LayersPanel({ tick = 0 }) {
 
   return (
     <div className="lp-panel">
+      <input
+        ref={replaceFileRef}
+        type="file"
+        accept="image/*"
+        style={{ display: "none" }}
+        onChange={handleReplaceFile}
+      />
       <div className="lp-header">
         <span className="lp-title">Layers</span>
         <div style={{ display: 'flex', gap: '8px' }}>
@@ -497,89 +638,19 @@ export default function LayersPanel({ tick = 0 }) {
         </div>
       </div>
       <div className="lp-content">
-        {(() => {
-          const landmarkPolys = pmState.filter(f => f.category === 'landmark').map(f => ({ ...f, type: 'polygon' }));
-          const isExpanded = expandedLayers['landmarks'];
-          const allVisible = landmarkPolys.length > 0 && landmarkPolys.every(p => p.visible !== false);
-          
-          return (
-            <div className="lp-layer">
-              <div 
-                className={`lp-layer-row ${selectedLayerItemId === 'landmarks' ? 'lp-layer-row--active' : ''}`}
-                style={{ paddingLeft: 8, cursor: 'pointer' }}
-                onClick={(e) => {
-                  e.stopPropagation();
-                  setSelectedLayerItemId('landmarks');
-                }}
-              >
-                <button
-                  className={`lp-toggle-btn ${!allVisible ? 'lp-toggle-btn--hidden' : ''}`}
-                  style={{ padding: 0, marginRight: 8 }}
-                  onClick={(e) => handleToggleVisibility(e, null, 'landmarks')}
-                  title={allVisible ? "Hide all" : "Show all"}
-                >
-                  {allVisible ? <EyeIcon /> : <EyeOffIcon />}
-                </button>
-                <div className="lp-child-icon" style={{marginRight: 8}}>
-                  <PolygonIcon />
-                </div>
-                <span style={{ fontSize: '13px', fontWeight: 600, color: '#e2e8f0', flexGrow: 1 }}>
-                  Landmarks ({landmarkPolys.length})
-                </span>
-                {(() => {
-                  const folderId = 'landmarks';
-                  const settings = project?.folderSettings?.[folderId] || {};
-                  const styleMode = settings.styleMode || 'individual';
-                  const color = settings.color || '#2ecc71';
-                  
-                  return (
-                    <div className="lp-menu-wrap" style={{ marginRight: 8 }}>
-                      <ColorPickerPopover
-                        color={color}
-                        onChange={(c) => handleColorChange(folderId, false, c, landmarkPolys)}
-                        styleMode={styleMode}
-                        onStyleModeChange={(newMode) => handleStyleModeToggle(folderId, false, newMode, color, landmarkPolys)}
-                        triggerElement={
-                          styleMode === 'uniform' ? null : (
-                            <button 
-                              className="lp-style-btn"
-                              title="Style Mode"
-                            >
-                              <PaintBrushIcon />
-                            </button>
-                          )
-                        }
-                      />
-                    </div>
-                  );
-                })()}
-
-                <button 
-                  className={`lp-expand-btn ${isExpanded ? 'lp-expand-btn--expanded' : ''}`} 
-                  style={{ visibility: landmarkPolys.length > 0 ? 'visible' : 'hidden' }}
-                  onClick={(e) => { e.stopPropagation(); toggleExpand('landmarks', e); }}
-                >
-                  <ChevronIcon />
-                </button>
-              </div>
-              {isExpanded && (
-                <div className="lp-nested-children">
-                  {landmarkPolys.map(p => renderItemChild(p, null, true, false))} 
-                </div>
-              )}
-            </div>
-          );
-        })()}
         {layers.map(layer => {
           const isActive = layer.id === activeLayerId;
           const isExpanded = expandedLayers[layer.id];
           const children = getLayerChildren(layer.id);
-          
+
           return (
             <div
               key={layer.id}
               className={`lp-layer ${isActive ? 'lp-layer--active' : ''}`}
-              onClick={() => handleLayerClick(layer.id)}
+              onClick={(e) => {
+                handleLayerClick(layer.id);
+                toggleExpand(layer.id, e);
+              }}
               draggable
               onDragStart={(e) => handleDragStart(e, layer.id)}
               onDragOver={handleDragOver}
@@ -596,21 +667,49 @@ export default function LayersPanel({ tick = 0 }) {
                 >
                   {layer.visible ? <EyeIcon /> : <EyeOffIcon />}
                 </button>
-                <input
-                  type="text"
-                  className="lp-name-input"
-                  value={layer.name}
-                  onChange={(e) => updateLayer(layer.id, { name: e.target.value })}
-                  onClick={(e) => e.stopPropagation()}
-                />
-                
+                {editingLayerId === layer.id ? (
+                  <input
+                    type="text"
+                    className="lp-name-input"
+                    value={tempLayerName}
+                    autoFocus
+                    onChange={(e) => setTempLayerName(e.target.value)}
+                    onClick={(e) => e.stopPropagation()}
+                    onKeyDown={(e) => {
+                      e.stopPropagation();
+                      if (e.key === 'Enter') {
+                        updateLayer(layer.id, { name: tempLayerName });
+                        setEditingLayerId(null);
+                      } else if (e.key === 'Escape') {
+                        setEditingLayerId(null);
+                      }
+                    }}
+                    onBlur={() => {
+                      updateLayer(layer.id, { name: tempLayerName });
+                      setEditingLayerId(null);
+                    }}
+                  />
+                ) : (
+                  <span
+                    className="lp-name-input"
+                    style={{ cursor: 'pointer', flex: 1, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}
+                  >
+                    {layer.name}
+                  </span>
+                )}
+
                 <div className="lp-menu-wrap">
                   <button className="lp-menu-btn" onClick={(e) => handleMenuClick(layer.id, e)}>
                     <MoreIcon />
                   </button>
                   {menuOpenId === layer.id && (
                     <div className="lp-dropdown">
-                      <button className="lp-dropdown-item" onClick={(e) => { e.stopPropagation(); setMenuOpenId(null); document.querySelector('.lp-name-input')?.focus(); }}>Rename</button>
+                      <button className="lp-dropdown-item" onClick={(e) => {
+                        e.stopPropagation();
+                        setMenuOpenId(null);
+                        setEditingLayerId(layer.id);
+                        setTempLayerName(layer.name);
+                      }}>Rename</button>
                       <button className="lp-dropdown-item" onClick={(e) => handleExport(layer.id, e)}>Export to JSON</button>
                       <button className="lp-dropdown-item lp-dropdown-item--danger" onClick={(e) => handleDelete(layer.id, e)}>Delete layer</button>
                     </div>
@@ -625,7 +724,7 @@ export default function LayersPanel({ tick = 0 }) {
                     onStyleModeChange={(newMode) => handleStyleModeToggle(layer.id, true, newMode, layer.color, getLayerChildren(layer.id))}
                     triggerElement={
                       (layer.styleMode === 'uniform') ? null : (
-                        <button 
+                        <button
                           className="lp-style-btn"
                           title="Style Mode"
                         >
@@ -635,7 +734,7 @@ export default function LayersPanel({ tick = 0 }) {
                     }
                   />
                 </div>
-                
+
                 <button
                   className={`lp-expand-btn ${isExpanded ? 'lp-expand-btn--expanded' : ''}`}
                   onClick={(e) => toggleExpand(layer.id, e)}
@@ -651,9 +750,9 @@ export default function LayersPanel({ tick = 0 }) {
                     const fps = children.filter(c => c.type === 'floorplan');
                     const rootPolys = children.filter(c => c.type === 'polygon' && !c.metadata?.floorPlanId);
                     const rootPins = children.filter(c => c.type === 'pin' && !c.metadata?.floorPlanId);
-                    
+
                     const rootChildren = [...rootPolys, ...rootPins];
-                    
+
                     return (
                       <>
                         {fps.map(fp => {
@@ -661,12 +760,14 @@ export default function LayersPanel({ tick = 0 }) {
                           const isExpanded = expandedLayers[folderId];
                           return (
                             <div key={folderId} className="lp-fp-folder">
-                              <div 
+                              <div
                                 className={`lp-layer-row ${selectedLayerItemId === folderId ? 'lp-layer-row--active' : ''}`}
                                 style={{ paddingLeft: 8, cursor: 'pointer' }}
                                 onClick={(e) => {
                                   e.stopPropagation();
                                   setSelectedLayerItemId(folderId);
+                                  handleLayerClick(layer.id);
+                                  toggleExpand(folderId, e);
                                 }}
                               >
                                 <button
@@ -677,9 +778,55 @@ export default function LayersPanel({ tick = 0 }) {
                                 >
                                   {fp.visible !== false ? <EyeIcon /> : <EyeOffIcon />}
                                 </button>
-                                <span style={{ fontSize: '13px', fontWeight: 600, color: '#e2e8f0', flexGrow: 1 }}>
-                                  {fp.name || 'Floor Plan'}
-                                </span>
+                                {editingLayerId === folderId ? (
+                                  <input
+                                    type="text"
+                                    className="lp-name-input"
+                                    value={tempLayerName}
+                                    autoFocus
+                                    onChange={(e) => setTempLayerName(e.target.value)}
+                                    onClick={(e) => e.stopPropagation()}
+                                    onKeyDown={(e) => {
+                                      e.stopPropagation();
+                                      if (e.key === 'Enter') {
+                                        updateFolderSetting(folderId, { name: tempLayerName });
+                                        setEditingLayerId(null);
+                                      } else if (e.key === 'Escape') {
+                                        setEditingLayerId(null);
+                                      }
+                                    }}
+                                    onBlur={() => {
+                                      updateFolderSetting(folderId, { name: tempLayerName });
+                                      setEditingLayerId(null);
+                                    }}
+                                  />
+                                ) : (
+                                  <span style={{ fontSize: '13px', fontWeight: 600, color: '#e2e8f0', flexGrow: 1, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }} onDoubleClick={(e) => {
+                                    e.stopPropagation();
+                                    setEditingLayerId(folderId);
+                                    const folderName = project?.folderSettings?.[folderId]?.name || fp.name || 'Floor Plan';
+                                    setTempLayerName(folderName);
+                                  }}>
+                                    {project?.folderSettings?.[folderId]?.name || fp.name || 'Floor Plan'}
+                                  </span>
+                                )}
+
+                                <div className="lp-menu-wrap">
+                                  <button className="lp-menu-btn" onClick={(e) => handleMenuClick(folderId, e)}>
+                                    <MoreIcon />
+                                  </button>
+                                  {menuOpenId === folderId && (
+                                    <div className="lp-dropdown">
+                                      <button className="lp-dropdown-item" onClick={(e) => {
+                                        e.stopPropagation();
+                                        setMenuOpenId(null);
+                                        setEditingLayerId(folderId);
+                                        const folderName = project?.folderSettings?.[folderId]?.name || fp.name || 'Floor Plan';
+                                        setTempLayerName(folderName);
+                                      }}>Rename</button>
+                                    </div>
+                                  )}
+                                </div>
 
                                 {(() => {
                                   const boundaryPoly = children.find(c => c.type === 'polygon' && c.metadata?.floorPlanId === fp.id && c.category === 'project');
@@ -690,31 +837,31 @@ export default function LayersPanel({ tick = 0 }) {
                                   const settings = project?.folderSettings?.[folderId] || {};
                                   const styleMode = settings.styleMode || 'individual';
                                   const color = settings.color || '#00CED1';
-                                  
+
                                   return (
-                                      <div className="lp-menu-wrap" style={{ marginRight: 8 }}>
-                                        <ColorPickerPopover
-                                          color={color}
-                                          onChange={(c) => handleColorChange(folderId, false, c, fpChildren)}
-                                          styleMode={styleMode}
-                                          onStyleModeChange={(newMode) => handleStyleModeToggle(folderId, false, newMode, color, fpChildren)}
-                                          triggerElement={
-                                            styleMode === 'uniform' ? null : (
-                                              <button 
-                                                className="lp-style-btn"
-                                                title="Style Mode"
-                                              >
-                                                <PaintBrushIcon />
-                                              </button>
-                                            )
-                                          }
-                                        />
-                                      </div>
+                                    <div className="lp-menu-wrap" style={{ marginRight: 8 }}>
+                                      <ColorPickerPopover
+                                        color={color}
+                                        onChange={(c) => handleColorChange(folderId, false, c, fpChildren)}
+                                        styleMode={styleMode}
+                                        onStyleModeChange={(newMode) => handleStyleModeToggle(folderId, false, newMode, color, fpChildren)}
+                                        triggerElement={
+                                          styleMode === 'uniform' ? null : (
+                                            <button
+                                              className="lp-style-btn"
+                                              title="Style Mode"
+                                            >
+                                              <PaintBrushIcon />
+                                            </button>
+                                          )
+                                        }
+                                      />
+                                    </div>
                                   );
                                 })()}
-                                
-                                <button 
-                                  className={`lp-expand-btn ${isExpanded ? 'lp-expand-btn--expanded' : ''}`} 
+
+                                <button
+                                  className={`lp-expand-btn ${isExpanded ? 'lp-expand-btn--expanded' : ''}`}
                                   style={{ visibility: 'visible' }}
                                   onClick={(e) => { e.stopPropagation(); toggleExpand(folderId, e); }}
                                 >
@@ -729,7 +876,7 @@ export default function LayersPanel({ tick = 0 }) {
                                     const nestedPlots = children.filter(c => c.type === 'polygon' && c.metadata?.floorPlanId === fp.id && (c.category === 'unit' || c.category === 'pending-unit'));
                                     const otherPolys = children.filter(c => c.type === 'polygon' && c.metadata?.floorPlanId === fp.id && c.category !== 'unit' && c.category !== 'pending-unit' && c.id !== boundaryPoly?.id);
                                     const nestedPins = children.filter(c => c.type === 'pin' && c.metadata?.floorPlanId === fp.id);
-                                    
+
                                     nestedPlots.sort((a, b) => {
                                       const numA = parseInt(a.name, 10);
                                       const numB = parseInt(b.name, 10);
@@ -740,7 +887,7 @@ export default function LayersPanel({ tick = 0 }) {
                                       if (!isNumA && isNumB) return 1;
                                       return (a.name || '').localeCompare(b.name || '');
                                     });
-                                    
+
                                     const folderSettings = project?.folderSettings?.[folderId] || {};
                                     const isFolderUniform = folderSettings.styleMode === 'uniform';
 
@@ -755,15 +902,17 @@ export default function LayersPanel({ tick = 0 }) {
                                           const allPlotsVisible = nestedPlots.every(p => p.visible !== false);
                                           const plotsSettings = project?.folderSettings?.[plotsFolderId] || {};
                                           const isPlotsUniform = plotsSettings.styleMode === 'uniform';
-                                          
+
                                           return (
                                             <div key={plotsFolderId} className="lp-plots-folder">
-                                              <div 
+                                              <div
                                                 className={`lp-layer-row ${selectedLayerItemId === plotsFolderId ? 'lp-layer-row--active' : ''}`}
                                                 style={{ paddingLeft: 24, cursor: 'pointer', height: 28 }}
                                                 onClick={(e) => {
                                                   e.stopPropagation();
                                                   setSelectedLayerItemId(plotsFolderId);
+                                                  handleLayerClick(layer.id);
+                                                  toggleExpand(plotsFolderId, e);
                                                 }}
                                               >
                                                 <button
@@ -782,31 +931,31 @@ export default function LayersPanel({ tick = 0 }) {
                                                   const settings = project?.folderSettings?.[plotsFolderId] || {};
                                                   const styleMode = settings.styleMode || 'individual';
                                                   const color = settings.color || '#ff6b6b';
-                                                  
+
                                                   return (
-                                                      <div className="lp-menu-wrap" style={{ marginRight: 8 }}>
-                                                        <ColorPickerPopover
-                                                          color={color}
-                                                          onChange={(c) => handleColorChange(plotsFolderId, false, c, nestedPlots)}
-                                                          styleMode={styleMode}
-                                                          onStyleModeChange={(newMode) => handleStyleModeToggle(plotsFolderId, false, newMode, color, nestedPlots)}
-                                                          triggerElement={
-                                                            styleMode === 'uniform' ? null : (
-                                                              <button 
-                                                                className="lp-style-btn"
-                                                                title="Style Mode"
-                                                              >
-                                                                <PaintBrushIcon />
-                                                              </button>
-                                                            )
-                                                          }
-                                                        />
-                                                      </div>
+                                                    <div className="lp-menu-wrap" style={{ marginRight: 8 }}>
+                                                      <ColorPickerPopover
+                                                        color={color}
+                                                        onChange={(c) => handleColorChange(plotsFolderId, false, c, nestedPlots)}
+                                                        styleMode={styleMode}
+                                                        onStyleModeChange={(newMode) => handleStyleModeToggle(plotsFolderId, false, newMode, color, nestedPlots)}
+                                                        triggerElement={
+                                                          styleMode === 'uniform' ? null : (
+                                                            <button
+                                                              className="lp-style-btn"
+                                                              title="Style Mode"
+                                                            >
+                                                              <PaintBrushIcon />
+                                                            </button>
+                                                          )
+                                                        }
+                                                      />
+                                                    </div>
                                                   );
                                                 })()}
 
-                                                <button 
-                                                  className={`lp-expand-btn ${isPlotsExpanded ? 'lp-expand-btn--expanded' : ''}`} 
+                                                <button
+                                                  className={`lp-expand-btn ${isPlotsExpanded ? 'lp-expand-btn--expanded' : ''}`}
                                                   style={{ visibility: 'visible' }}
                                                   onClick={(e) => { e.stopPropagation(); toggleExpand(plotsFolderId, e); }}
                                                 >
@@ -815,7 +964,7 @@ export default function LayersPanel({ tick = 0 }) {
                                               </div>
                                               {isPlotsExpanded && (
                                                 <div className="lp-nested-children">
-                                                  {nestedPlots.map(nc => renderItemChild(nc, layer, false, true, isPlotsUniform))} 
+                                                  {nestedPlots.map(nc => renderItemChild(nc, layer, false, true, isPlotsUniform))}
                                                 </div>
                                               )}
                                             </div>
@@ -838,6 +987,162 @@ export default function LayersPanel({ tick = 0 }) {
             </div>
           );
         })}
+        {(() => {
+          const landmarkPolys = pmState.filter(f => f.category === 'landmark' || f.category === 'road' || f.category === 'bridge').map(f => ({ ...f, type: (f.category === 'road' || f.category === 'bridge') ? 'road' : 'polygon' }));
+          const isExpanded = expandedLayers['landmarks'];
+          const allVisible = landmarkPolys.length > 0 && landmarkPolys.every(p => p.visible !== false);
+
+          return (
+            <div className="lp-layer lp-layer-landmarks">
+              <div
+                className={`lp-layer-row ${selectedLayerItemId === 'landmarks' ? 'lp-layer-row--active' : ''}`}
+                style={{ paddingLeft: 8, cursor: 'pointer' }}
+                onClick={(e) => {
+                  e.stopPropagation();
+                  setSelectedLayerItemId('landmarks');
+                  toggleExpand('landmarks', e);
+                }}
+              >
+                <button
+                  className={`lp-toggle-btn ${!allVisible ? 'lp-toggle-btn--hidden' : ''}`}
+                  style={{ padding: 0, marginRight: 8 }}
+                  onClick={(e) => handleToggleVisibility(e, null, 'landmarks')}
+                  title={allVisible ? "Hide all" : "Show all"}
+                >
+                  {allVisible ? <EyeIcon /> : <EyeOffIcon />}
+                </button>
+                <div className="lp-child-icon" style={{ marginRight: 8 }}>
+                  <PolygonIcon />
+                </div>
+                <span style={{ fontSize: '13px', fontWeight: 600, color: '#e2e8f0', flexGrow: 1 }}>
+                  Landmarks ({landmarkPolys.length})
+                </span>
+                {(() => {
+                  const folderId = 'landmarks';
+                  const settings = project?.folderSettings?.[folderId] || {};
+                  const styleMode = settings.styleMode || 'individual';
+                  const color = settings.color || '#2ecc71';
+
+                  return (
+                    <div className="lp-menu-wrap" style={{ marginRight: 8 }}>
+                      <ColorPickerPopover
+                        color={color}
+                        onChange={(c) => handleColorChange(folderId, false, c, landmarkPolys)}
+                        styleMode={styleMode}
+                        onStyleModeChange={(newMode) => handleStyleModeToggle(folderId, false, newMode, color, landmarkPolys)}
+                        triggerElement={
+                          styleMode === 'uniform' ? null : (
+                            <button
+                              className="lp-style-btn"
+                              title="Style Mode"
+                            >
+                              <PaintBrushIcon />
+                            </button>
+                          )
+                        }
+                      />
+                    </div>
+                  );
+                })()}
+
+                <button
+                  className={`lp-expand-btn ${isExpanded ? 'lp-expand-btn--expanded' : ''}`}
+                  style={{ visibility: landmarkPolys.length > 0 ? 'visible' : 'hidden' }}
+                  onClick={(e) => { e.stopPropagation(); toggleExpand('landmarks', e); }}
+                >
+                  <ChevronIcon />
+                </button>
+              </div>
+              {isExpanded && (() => {
+                const lmRoads = landmarkPolys.filter(p => p.type === 'road');
+                const lmPolys = landmarkPolys.filter(p => p.type === 'polygon');
+
+                const renderNestedFolder = (title, folderId, items, defaultColor) => {
+                  if (items.length === 0) return null;
+                  const isFolderExpanded = expandedLayers[folderId];
+                  const allVisible = items.every(p => p.visible !== false);
+                  const settings = project?.folderSettings?.[folderId] || {};
+                  const styleMode = settings.styleMode || 'individual';
+                  const isUniform = styleMode === 'uniform';
+                  const color = settings.color || defaultColor;
+
+                  return (
+                    <div key={folderId} className="lp-plots-folder">
+                      <div
+                        className={`lp-layer-row ${selectedLayerItemId === folderId ? 'lp-layer-row--active' : ''}`}
+                        style={{ paddingLeft: 24, cursor: 'pointer', height: 28 }}
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          setSelectedLayerItemId(folderId);
+                          toggleExpand(folderId, e);
+                        }}
+                      >
+                        <button
+                          className={`lp-toggle-btn ${!allVisible ? 'lp-toggle-btn--hidden' : ''}`}
+                          style={{ padding: 0, marginRight: 8 }}
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            const newState = !allVisible;
+                            items.forEach(p => {
+                              const entry = polygonManagerRef.current?.polygons.get(p.id);
+                              if (entry) entry.itemVisible = newState;
+                            });
+                            if (polygonManagerRef.current) polygonManagerRef.current.callbacks.onChange();
+                          }}
+                          title={allVisible ? "Hide all" : "Show all"}
+                        >
+                          {allVisible ? <EyeIcon /> : <EyeOffIcon />}
+                        </button>
+                        <span style={{ fontSize: '12px', fontWeight: 600, color: '#94a3b8', textTransform: 'uppercase', letterSpacing: '0.05em', flexGrow: 1 }}>
+                          {title} ({items.length})
+                        </span>
+
+                        <div className="lp-menu-wrap" style={{ marginRight: 8 }}>
+                          <ColorPickerPopover
+                            color={color}
+                            onChange={(c) => handleColorChange(folderId, false, c, items)}
+                            styleMode={styleMode}
+                            onStyleModeChange={(newMode) => handleStyleModeToggle(folderId, false, newMode, color, items)}
+                            triggerElement={
+                              styleMode === 'uniform' ? null : (
+                                <button
+                                  className="lp-style-btn"
+                                  title="Style Mode"
+                                >
+                                  <PaintBrushIcon />
+                                </button>
+                              )
+                            }
+                          />
+                        </div>
+
+                        <button
+                          className={`lp-expand-btn ${isFolderExpanded ? 'lp-expand-btn--expanded' : ''}`}
+                          style={{ visibility: 'visible' }}
+                          onClick={(e) => { e.stopPropagation(); toggleExpand(folderId, e); }}
+                        >
+                          <ChevronIcon />
+                        </button>
+                      </div>
+                      {isFolderExpanded && (
+                        <div className="lp-nested-children">
+                          {items.map(nc => renderItemChild(nc, null, false, true, isUniform))}
+                        </div>
+                      )}
+                    </div>
+                  );
+                };
+
+                return (
+                  <>
+                    {renderNestedFolder('Roads', 'lm-roads', lmRoads, '#FF9800')}
+                    {renderNestedFolder('Polygons', 'lm-polygons', lmPolys, '#2ecc71')}
+                  </>
+                );
+              })()}
+            </div>
+          );
+        })()}
       </div>
     </div>
   );

@@ -56,7 +56,7 @@ function useGoogleMapsReady() {
 // ─── Helper: Focus camera on bounds with ~50% viewport fill ──────────────────
 export function focusOnBounds(map, bounds) {
   if (!map || !bounds) return;
-  
+
   // To avoid the map "bouncing" (animating to fitBounds, stopping, then abruptly 
   // zooming out), we use padding instead of the 'idle' + map.setZoom(-1) trick.
   // 25% padding on all sides ensures the bounds fill exactly 50% of the viewport.
@@ -283,9 +283,12 @@ function MapWorkspaceInner() {
     project, commitProject, pushThunk,
     undo, redo,
     activeTool, setActiveTool,
+    activeLandmarkTool, setActiveLandmarkTool,
     selectedPolygonEntry, setSelectedPolygonEntry,
     selectedFloorPlanId, setSelectedFloorPlanId,
     selectedLayerItemId, setSelectedLayerItemId,
+    selectedRoadEntry, setSelectedRoadEntry,
+    roadPopupPos, setRoadPopupPos,
     floorPlanMode,
     gcpPoints, setGCPPoints,
     pendingImgPt, setPendingImgPt,
@@ -321,6 +324,11 @@ function MapWorkspaceInner() {
   const [pendingPolygon, setPendingPolygon] = useState(null); // { path: LatLng[] }
   const [pendingName, setPendingName] = useState('');
   const [pendingCategory, setPendingCategory] = useState('project');
+
+  // Road naming modal — same pattern as polygon
+  const [pendingRoad, setPendingRoad] = useState(null); // { path: [{lat,lng}...] }
+  const [pendingRoadName, setPendingRoadName] = useState('');
+  const [pendingRoadCategory, setPendingRoadCategory] = useState('Road'); // 'Road' | 'Bridge'
 
   const [selectedPinEntry, setSelectedPinEntry] = useState(null);
   const [pinPopupPos, setPinPopupPos] = useState(null);
@@ -367,6 +375,11 @@ function MapWorkspaceInner() {
   const previewCirclesRef = useRef([]);     // radius circles
   const mapListenersRef = useRef([]);
   const polyCleanupRef = useRef(null); // cleanup fn for in-progress polygon draw visuals
+  const roadCleanupRef = useRef(null); // cleanup fn for in-progress road draw visuals
+  // Called from keyboard handler to finish an in-progress road drawing
+  const finishRoadRef = useRef(null);
+  // When non-null, road drawing appends to this existing road's points array
+  const extendingRoadIdRef = useRef(null);
 
   // Floor plan file input
   const floorFileRef = useRef(null);
@@ -378,6 +391,26 @@ function MapWorkspaceInner() {
     if (!polygonManagerRef.current) {
       polygonManagerRef.current = new PolygonManager(mapRef.current, {
         onSelect: (entry, latLng) => {
+          if (entry && (entry.category === 'road' || entry.category === 'bridge')) {
+            setSelectedRoadEntry(entry);
+            setSelectedLayerItemId(entry.id);
+            pinManagerRef.current?.deselect();
+            floorPlanManagerRef.current?.onSelect(null);
+            setSelectedPolygonEntry(null);
+            setPolygonPopupPos(null);
+            setPolygonMetricsNow(null);
+            const isNewSelection = entry.id !== lastSelectedPolygonIdRef.current;
+            lastSelectedPolygonIdRef.current = entry.id;
+
+            if (isNewSelection && mapRef.current && window.google?.maps) {
+              const bounds = new window.google.maps.LatLngBounds();
+              entry.gPolygon.getPath().forEach(p => bounds.extend(p));
+              focusOnBounds(mapRef.current, bounds);
+            }
+            if (latLng) setRoadPopupPos(latLng);
+            return;
+          }
+
           setSelectedPolygonEntry(entry);
           setSelectedLayerItemId(entry ? entry.id : null);
           if (!entry) {
@@ -392,6 +425,8 @@ function MapWorkspaceInner() {
           // Deselect others to guarantee single active selection globally
           pinManagerRef.current?.deselect();
           floorPlanManagerRef.current?.onSelect(null);
+          setSelectedRoadEntry(null);
+          setRoadPopupPos(null);
 
           const isNewSelection = entry.id !== lastSelectedPolygonIdRef.current;
           lastSelectedPolygonIdRef.current = entry.id;
@@ -434,16 +469,18 @@ function MapWorkspaceInner() {
         onSelect: (entry, latLng) => {
           setSelectedPinEntry(entry);
           setSelectedLayerItemId(entry ? entry.id : null);
-          if (!entry) { 
-            setPinPopupPos(null); 
-            setPinCoordsCopied(false); 
+          if (!entry) {
+            setPinPopupPos(null);
+            setPinCoordsCopied(false);
             lastSelectedPinIdRef.current = null;
-            return; 
+            return;
           }
 
           // Deselect others to guarantee single active selection globally
           polygonManagerRef.current?.deselect();
           floorPlanManagerRef.current?.onSelect(null);
+          setSelectedRoadEntry(null);
+          setRoadPopupPos(null);
 
           const isNewSelection = entry.id !== lastSelectedPinIdRef.current;
           lastSelectedPinIdRef.current = entry.id;
@@ -477,16 +514,18 @@ function MapWorkspaceInner() {
         onSelect: (id) => {
           setSelectedFloorPlanId(id);
           setSelectedLayerItemId(id || null);
-          
+
           if (id) {
             // Deselect others to guarantee single active selection globally
             polygonManagerRef.current?.deselect();
             pinManagerRef.current?.deselect();
+            setSelectedRoadEntry(null);
+            setRoadPopupPos(null);
           }
 
           const isNewSelection = id !== lastSelectedFloorPlanIdRef.current;
           lastSelectedFloorPlanIdRef.current = id || null;
-          
+
           if (isNewSelection && id && floorPlanManagerRef.current && mapRef.current && window.google?.maps) {
             const entry = floorPlanManagerRef.current.overlays.get(id);
             // Only auto-focus if it is locked. If it is unlocked, the user is likely
@@ -499,6 +538,19 @@ function MapWorkspaceInner() {
           }
         },
         onChange: () => { setTick(t => t + 1); },
+        onDelete: (id) => {
+          if (polygonManagerRef.current) {
+            const state = polygonManagerRef.current.getState();
+            if (state && state.polygons) {
+              state.polygons.forEach(p => {
+                if (p.metadata?.floorPlanId === id) {
+                  polygonManagerRef.current.deletePolygon(p.id, true);
+                }
+              });
+            }
+          }
+          setTick(t => t + 1);
+        },
         pushHistory: pushThunk,
         getActiveTool: () => activeToolRef.current,
         // Auto-plot the boundary polygon from the floorplan's own traced
@@ -513,7 +565,7 @@ function MapWorkspaceInner() {
           const polyId = `floorplan-boundary-${id}`;
           const fp = floorPlanManagerRef.current?.getState().find(f => f.id === id);
           const fpName = fp && fp.name ? `${fp.name} Boundary` : 'Floorplan Boundary';
-          
+
           if (pm.polygons.has(polyId)) {
             const entry = pm.polygons.get(polyId);
             entry.gPolygon.setPath(path);
@@ -563,7 +615,8 @@ function MapWorkspaceInner() {
   const clearPreview = useCallback(() => {
     if (previewLineRef.current) { previewLineRef.current.setMap(null); previewLineRef.current = null; }
     previewDotsRef.current.forEach((o) => o.setMap(null)); previewDotsRef.current = [];
-    previewCirclesRef.current.forEach((o) => o.setMap(null)); previewCirclesRef.current = [];  }, []);
+    previewCirclesRef.current.forEach((o) => o.setMap(null)); previewCirclesRef.current = [];
+  }, []);
   const cancelDrawing = useCallback(() => {
     inProgressRef.current = [];
     setInProgressPoints([]);
@@ -579,9 +632,22 @@ function MapWorkspaceInner() {
     const handler = (e) => {
       if (e.key === "Escape") {
         if (pendingPolygon) { setPendingPolygon(null); return; }
+        if (pendingRoad) { setPendingRoad(null); return; }
+        // Also cancel any in-progress road extend
+        extendingRoadIdRef.current = null;
         cancelDrawing();
         setActiveTool(null);
         return;
+      }
+      // Enter key finishes an in-progress road draw
+      if (e.key === 'Enter') {
+        const tool = activeToolRef.current;
+        const baseTl = tool?.includes('-') ? tool.split('-').slice(1).join('-') : tool;
+        if (baseTl === 'road' && finishRoadRef.current) {
+          e.preventDefault();
+          finishRoadRef.current();
+          return;
+        }
       }
       if (e.ctrlKey && !e.shiftKey && e.key === "z") { e.preventDefault(); undo(); return; }
       if (e.ctrlKey && (e.key === "y" || (e.shiftKey && e.key === "Z"))) { e.preventDefault(); redo(); return; }
@@ -591,7 +657,7 @@ function MapWorkspaceInner() {
     };
     window.addEventListener("keydown", handler);
     return () => window.removeEventListener("keydown", handler);
-  }, [cancelDrawing, setActiveTool, undo, redo, pendingPolygon]);
+  }, [cancelDrawing, setActiveTool, undo, redo, pendingPolygon, pendingRoad]);
 
   // ── Commit functions (use refs internally for non-stale access in listeners) ─
 
@@ -607,26 +673,70 @@ function MapWorkspaceInner() {
     }));
   }, [commitProject]);
 
-  const commitRoad = useCallback((points) => {
+  const commitRoad = useCallback((points, name, category, layerId) => {
     const p = toolPropsRef.current.road;
-    commitProject((proj) => ({
-      ...proj,
-      roads: [...proj.roads, {
-        id: nextId("road"),
-        points,
-        lineColor: p.lineColor || "#FF9800",
-        lineWidth: p.lineWidth || 3,
-        roadWidth: p.roadWidth || 6,
-        roadName: p.roadName || "",
-      }],
-    }));
-  }, [commitProject]);
+    const roadId = nextId("road");
+    const path = points.map(pt => new window.google.maps.LatLng(pt.lat, pt.lng));
+    polygonManagerRef.current?.createPolygon(
+      roadId,
+      name || 'Road',
+      path,
+      'road',
+      layerId || activeLayerIdRef.current || 'layer-1',
+      p.lineColor || "#FF9800",
+      {},
+      { strokeWeight: p.lineWidth || 3 }
+    );
+    return roadId;
+  }, []);
 
   // Keep stable refs to commit fns so drawing-effect closures never go stale
   const commitRoadRef = useRef(commitRoad);
   const commitRadiusRef = useRef(commitRadius);
   useEffect(() => { commitRoadRef.current = commitRoad; }, [commitRoad]);
   useEffect(() => { commitRadiusRef.current = commitRadius; }, [commitRadius]);
+
+  // ── Road naming/classification modal ────────────────────────────────────────
+  // Mirrors the polygon beginNaming / confirmPendingPolygon pattern exactly.
+  const beginRoadNaming = useCallback((path) => {
+    const roads = polygonManagerRef.current?.getState()?.roads || [];
+    const count = roads.length + 1;
+    setPendingRoadName(`Road ${count}`);
+    setPendingRoadCategory('Road');
+    setPendingRoad({ path });
+    setActiveTool(null);
+  }, [setActiveTool]);
+
+  const beginRoadNamingRef = useRef(beginRoadNaming);
+  useEffect(() => { beginRoadNamingRef.current = beginRoadNaming; }, [beginRoadNaming]);
+
+  const confirmPendingRoad = useCallback(() => {
+    if (!pendingRoad) return;
+    const p = toolPropsRef.current.road;
+    const newId = nextId('road');
+    const layerId = activeLayerIdRef.current || 'layer-1';
+    
+    if (polygonManagerRef.current) {
+      polygonManagerRef.current.createPolygon(
+        newId,
+        pendingRoadName.trim() || 'Road',
+        pendingRoad.path,
+        pendingRoadCategory === 'Bridge' ? 'bridge' : 'road',
+        layerId,
+        p.lineColor || '#FF9800',
+        {},
+        { strokeWeight: p.lineWidth || 3 }
+      );
+      polygonManagerRef.current.callbacks.onChange();
+      polygonManagerRef.current.select(newId);
+    }
+    
+    setPendingRoad(null);
+  }, [pendingRoad, pendingRoadName, pendingRoadCategory]);
+
+  const cancelPendingRoad = useCallback(() => {
+    setPendingRoad(null);
+  }, []);
 
   // ── Polygon naming/classification modal ─────────────────────────────────────
   // A closed polygon path is held here uncommitted until the user names it and
@@ -646,7 +756,7 @@ function MapWorkspaceInner() {
         }
       }
     }
-    
+
     const pm = polygonManagerRef.current;
     let count = 1;
     if (pm) {
@@ -655,11 +765,11 @@ function MapWorkspaceInner() {
       else if (defaultCat === 'unit' || defaultCat === 'pending-unit') count = polys.filter(p => p.category === 'unit' || p.category === 'pending-unit').length + 1;
       else count = polys.filter(p => p.category !== 'landmark' && p.category !== 'unit' && p.category !== 'pending-unit').length + 1;
     }
-    
+
     let defaultName = `Boundary ${count}`;
     if (defaultCat === 'landmark') defaultName = `Landmark ${count}`;
     else if (defaultCat === 'unit' || defaultCat === 'pending-unit') defaultName = `Unit ${count}`;
-    
+
     setPendingName(defaultName);
     setPendingCategory(defaultCat);
     setPendingPolygon({ path });
@@ -674,27 +784,27 @@ function MapWorkspaceInner() {
     if (!pendingPolygon || !pm) return;
     const id = nextId('poly');
     const category = pendingCategory;
-    
+
     const polys = Array.from(pm.polygons.values());
     let count = 1;
     if (category === 'landmark') count = polys.filter(p => p.category === 'landmark').length + 1;
     else if (category === 'unit' || category === 'pending-unit') count = polys.filter(p => p.category === 'unit' || p.category === 'pending-unit').length + 1;
     else count = polys.filter(p => p.category !== 'landmark' && p.category !== 'unit' && p.category !== 'pending-unit').length + 1;
-    
+
     let fallbackName = `Boundary ${count}`;
     if (category === 'landmark') fallbackName = `Landmark ${count}`;
     else if (category === 'unit' || category === 'pending-unit') fallbackName = `Unit ${count}`;
-    
+
     const name = pendingName.trim() || fallbackName;
     const path = pendingPolygon.path;
-    
+
     let targetLayerId = activeLayerIdRef.current;
     let targetCategory = category;
     let targetMetadata = {};
 
     // Route based on selected folder/layer
     const selectedItem = selectedLayerItemIdRef.current;
-    
+
     let selectedFloorplanFolder = false;
     let floorplanExists = false;
 
@@ -718,14 +828,19 @@ function MapWorkspaceInner() {
     let finalColor = activeLayerColor;
     if (category === 'unit' || category === 'pending-unit') {
       finalColor = '#ff6b6b';
-      
+
       if (category === 'unit') {
         if (selectedFloorplanFolder && floorplanExists) {
-          // targetMetadata already has floorPlanId from the routing block above,
-          // which will naturally nest it inside that floorplan's "Plots" folder.
+          // targetMetadata already has floorPlanId from the routing block above
         } else {
-          // Add directly to the general Layer by ensuring no floorPlanId is attached.
-          delete targetMetadata.floorPlanId;
+          // Check if there is ANY floorplan in the active layer
+          const layerFps = floorPlanManagerRef.current?.getState().filter(f => f.layerId === targetLayerId) || [];
+          if (layerFps.length > 0) {
+            targetMetadata.floorPlanId = layerFps[0].id;
+          } else {
+            // Add directly to the general Layer by ensuring no floorPlanId is attached.
+            delete targetMetadata.floorPlanId;
+          }
         }
       } else {
         // Fallback for pending-unit to preserve old behavior
@@ -793,7 +908,7 @@ function MapWorkspaceInner() {
       else if (newCat === 'unit' || newCat === 'pending-unit') count = polys.filter(p => p.category === 'unit' || p.category === 'pending-unit').length + 1;
       else count = polys.filter(p => p.category !== 'landmark' && p.category !== 'unit' && p.category !== 'pending-unit').length + 1;
     }
-    
+
     const isUnchangedBoundary = /^Boundary \d+$/.test(pendingName);
     const isUnchangedLandmark = /^Landmark \d+$/.test(pendingName);
     const isUnchangedUnit = /^Unit \d+$/.test(pendingName);
@@ -1031,22 +1146,146 @@ function MapWorkspaceInner() {
 
     // ── Road ───────────────────────────────────────────────────────────────
     else if (baseTool === "road") {
-      ls.push(map.addListener("click", (e) => {
-        const pt = { lat: e.latLng.lat(), lng: e.latLng.lng() };
-        if (timer) clearTimeout(timer);
-        timer = setTimeout(() => {
-          timer = null;
-          inProgressRef.current = [...inProgressRef.current, pt];
-          setInProgressPoints([...inProgressRef.current]);
-        }, 220);
+      // --- Extend mode: append clicks to an existing road ---
+      const extendId = extendingRoadIdRef.current;
+      if (extendId) {
+        let extendPreviewLine = new window.google.maps.Polyline({
+          map, path: [], strokeColor: '#FF9800', strokeWeight: 3,
+          strokeOpacity: 0.55, zIndex: 50, clickable: false,
+        });
+        let lastExtendPt = null;
+
+        // Seed preview start from last point of the road being extended
+        const existingEntry = polygonManagerRef.current?.polygons.get(extendId);
+        if (existingEntry) {
+          const path = existingEntry.gPolygon.getPath();
+          if (path.getLength() > 0) {
+            lastExtendPt = path.getAt(path.getLength() - 1);
+          }
+        }
+
+        ls.push(map.addListener('mousemove', (e) => {
+          if (!lastExtendPt) return;
+          extendPreviewLine.setPath([lastExtendPt, e.latLng]);
+        }));
+
+        ls.push(map.addListener('click', (e) => {
+          lastExtendPt = e.latLng;
+          // Append to the road in polygon manager
+          const entry = polygonManagerRef.current?.polygons.get(extendId);
+          if (entry) {
+            if (entry.takeSnapshot) entry.takeSnapshot();
+            entry.gPolygon.getPath().push(e.latLng);
+            polygonManagerRef.current?.callbacks.onChange?.();
+            setSelectedRoadEntry({ ...entry });
+          }
+        }));
+
+        // Double-click or Enter exits extend mode (Enter handled by keyboard effect)
+        ls.push(map.addListener('dblclick', (e) => {
+          e.stop && e.stop();
+          extendPreviewLine.setMap(null);
+          extendingRoadIdRef.current = null;
+          setActiveTool(null);
+        }));
+
+        finishRoadRef.current = () => {
+          extendPreviewLine.setMap(null);
+          extendingRoadIdRef.current = null;
+          setActiveTool(null);
+        };
+
+        roadCleanupRef.current = () => {
+          extendPreviewLine.setMap(null);
+        };
+        // Register listeners and return cleanup explicitly (don't fall through to normal draw)
+        mapListenersRef.current = ls;
+        return () => {
+          ls.forEach((l) => window.google.maps.event.removeListener(l));
+          if (roadCleanupRef.current) { roadCleanupRef.current(); roadCleanupRef.current = null; }
+          map.setOptions({ draggableCursor: '', disableDoubleClickZoom: false });
+        };
+      }
+
+      // --- Normal draw mode: polygon-style rubber-band ---
+      let drawPath = []; // [{lat,lng}]
+      let drawMarkers = [];
+
+      const roadColor = toolPropsRef.current.road.lineColor || '#FF9800';
+      const roadWeight = toolPropsRef.current.road.lineWidth || 3;
+
+      // Live rubber-band preview segment (follows cursor)
+      let previewLine = new window.google.maps.Polyline({
+        map, path: [], strokeColor: roadColor, strokeWeight: roadWeight,
+        strokeOpacity: 0.55, zIndex: 50, clickable: false,
+      });
+
+      // Committed segment line (placed points)
+      let placedLine = new window.google.maps.Polyline({
+        map, path: [], strokeColor: roadColor, strokeWeight: roadWeight + 0.5,
+        zIndex: 50, clickable: false,
+      });
+
+      map.setOptions({ draggableCursor: 'crosshair' });
+
+      const addPoint = (latLng) => {
+        const pt = { lat: latLng.lat(), lng: latLng.lng() };
+        drawPath.push(pt);
+        placedLine.setPath(drawPath);
+        const marker = new window.google.maps.Marker({
+          position: latLng, map, clickable: false, zIndex: 51,
+          icon: {
+            path: window.google.maps.SymbolPath.CIRCLE, scale: 5,
+            fillColor: roadColor, fillOpacity: 1,
+            strokeColor: '#ffffff', strokeWeight: 1.5,
+          },
+        });
+        drawMarkers.push(marker);
+        // Preview starts from new last point
+        previewLine.setPath(drawPath.length >= 1 ? [pt] : []);
+      };
+
+      const finish = () => {
+        previewLine.setMap(null);
+        placedLine.setMap(null);
+        drawMarkers.forEach((m) => m.setMap(null));
+        finishRoadRef.current = null;
+        if (drawPath.length >= 2) {
+          beginRoadNamingRef.current([...drawPath]);
+        }
+        drawPath = [];
+        drawMarkers = [];
+      };
+
+      // Register finish fn for Enter key
+      finishRoadRef.current = finish;
+
+      // Live rubber-band: update preview as mouse moves
+      ls.push(map.addListener('mousemove', (e) => {
+        if (drawPath.length === 0) return;
+        previewLine.setPath([drawPath[drawPath.length - 1], { lat: e.latLng.lat(), lng: e.latLng.lng() }]);
       }));
-      ls.push(map.addListener("dblclick", () => {
-        if (timer) { clearTimeout(timer); timer = null; }
-        const pts = inProgressRef.current;
-        if (pts.length >= 2) commitRoadRef.current([...pts]);
-        inProgressRef.current = [];
-        setInProgressPoints([]);
+
+      // Click: add a point
+      ls.push(map.addListener('click', (e) => {
+        addPoint(e.latLng);
       }));
+
+      // Double-click: finish drawing
+      ls.push(map.addListener('dblclick', (e) => {
+        e.stop && e.stop();
+        finish();
+      }));
+
+      // Store cleanup for draw visuals so the effect return can call it
+      roadCleanupRef.current = () => {
+        previewLine.setMap(null);
+        placedLine.setMap(null);
+        drawMarkers.forEach((m) => m.setMap(null));
+        drawPath = [];
+        drawMarkers = [];
+        finishRoadRef.current = null;
+      };
     }
 
     // ── Radius ─────────────────────────────────────────────────────────────
@@ -1093,6 +1332,10 @@ function MapWorkspaceInner() {
         polyCleanupRef.current();
         polyCleanupRef.current = null;
       }
+      if (roadCleanupRef.current) {
+        roadCleanupRef.current();
+        roadCleanupRef.current = null;
+      }
       pinManagerRef.current?.disarmPlacement();
       mapListenersRef.current = [];
       map.setOptions({ draggableCursor: "", disableDoubleClickZoom: false });
@@ -1113,18 +1356,27 @@ function MapWorkspaceInner() {
 
     // Polygons are handled natively by PolygonManager now.
 
-    // Roads
+    // Roads — clickable so users can select them for editing
     project.roads.forEach((road) => {
-      featureOverlaysRef.current.roads.push(
-        new GM.Polyline({
-          path: road.points,
-          strokeColor: road.lineColor,
-          strokeWeight: road.lineWidth,
-          strokeOpacity: 0.9,
-          map,
-          clickable: false,
-        })
-      );
+      const isSelected = selectedRoadEntry?.id === road.id;
+      const polyline = new GM.Polyline({
+        path: road.points,
+        strokeColor: road.lineColor || '#FF9800',
+        strokeWeight: isSelected ? (road.lineWidth || 3) + 3 : (road.lineWidth || 3),
+        strokeOpacity: 0.9,
+        map,
+        clickable: true,
+        zIndex: isSelected ? 10 : 5,
+      });
+      polyline.addListener('click', (e) => {
+        // Deselect polygon / pin / floorplan
+        polygonManagerRef.current?.deselect();
+        pinManagerRef.current?.deselect();
+        floorPlanManagerRef.current?.onSelect(null);
+        setSelectedRoadEntry(road);
+        setRoadPopupPos({ lat: e.latLng.lat(), lng: e.latLng.lng() });
+      });
+      featureOverlaysRef.current.roads.push(polyline);
     });
 
     // Radii
@@ -1159,7 +1411,7 @@ function MapWorkspaceInner() {
     return () => {
       Object.values(featureOverlaysRef.current).forEach((arr) => arr.forEach((o) => o.setMap(null)));
     };
-  }, [mapReady, project]);
+  }, [mapReady, project, selectedRoadEntry]);
 
   // ── Sync layer visibility ──────────────────────────────────────────────────
   useEffect(() => {
@@ -1296,7 +1548,7 @@ function MapWorkspaceInner() {
     const center = floorClickRef.current ?? mapRef.current?.getCenter()?.toJSON() ?? DEFAULT_CENTER;
 
     const id = nextId("fp");
-    
+
     let name = "Floor Plan";
     if (file.name) {
       name = file.name.replace(/\.[^/.]+$/, "");
@@ -1375,7 +1627,7 @@ function MapWorkspaceInner() {
                     </button>
                   </div>
                 </div>
-                
+
                 <div style={{ display: 'flex', flexDirection: 'column', gap: '8px', width: '100%', marginTop: '8px', marginBottom: '8px' }}>
                   <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
                     <span style={{ fontSize: '13px', color: '#94a3b8' }}>Color</span>
@@ -1567,6 +1819,135 @@ function MapWorkspaceInner() {
             </OverlayView>
           )}
 
+          {/* Road popup — custom popup mapped to PolygonManager */}
+          {selectedRoadEntry && roadPopupPos && (
+            <OverlayView
+              position={roadPopupPos}
+              mapPaneName={OverlayView.FLOAT_PANE}
+              getPixelPositionOffset={(width, height) => ({ x: -(width / 2), y: -height - 15 })}
+            >
+              <div
+                className="poly-popup"
+                onMouseDown={(e) => e.stopPropagation()}
+                onClick={(e) => e.stopPropagation()}
+                onDoubleClick={(e) => e.stopPropagation()}
+              >
+                <div className="poly-popup-header">Road Properties</div>
+                <input
+                  className="poly-popup-input"
+                  type="text"
+                  value={selectedRoadEntry.name || ''}
+                  onChange={(e) => {
+                    polygonManagerRef.current?.rename(selectedRoadEntry.id, e.target.value);
+                    setSelectedRoadEntry({ ...selectedRoadEntry, name: e.target.value });
+                  }}
+                  onMouseDown={(e) => e.stopPropagation()}
+                  onClick={(e) => e.stopPropagation()}
+                  placeholder="Road name"
+                />
+                <div className="poly-popup-cats-row" onMouseDown={(e) => e.stopPropagation()}>
+                  <span className="poly-popup-cats-label">Category</span>
+                  <div className="pp-cats">
+                    {['Road', 'Bridge'].map((cat) => (
+                      <button
+                        key={cat}
+                        type="button"
+                        className={`pp-cat${(selectedRoadEntry.category || '').toLowerCase() === cat.toLowerCase() ? ' pp-cat--active' : ''}`}
+                        onClick={() => {
+                          const c = cat.toLowerCase();
+                          polygonManagerRef.current?.setCategory(selectedRoadEntry.id, c);
+                          setSelectedRoadEntry({ ...selectedRoadEntry, category: c });
+                        }}
+                      >
+                        {cat}
+                      </button>
+                    ))}
+                  </div>
+                </div>
+
+                <div style={{ display: 'flex', flexDirection: 'column', gap: '8px', width: '100%', marginTop: '8px', marginBottom: '8px' }}>
+                  <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                    <span style={{ fontSize: '13px', color: '#94a3b8' }}>Color</span>
+                    <ColorPickerPopover
+                      color={selectedRoadEntry.color || '#FF9800'}
+                      onChange={(c) => {
+                        polygonManagerRef.current?.setColor(selectedRoadEntry.id, c);
+                        setSelectedRoadEntry({ ...selectedRoadEntry, color: c });
+                      }}
+                    />
+                  </div>
+                  <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                    <span style={{ fontSize: '13px', color: '#94a3b8' }}>Line Width</span>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                      <input
+                        type="range"
+                        min="1"
+                        max="20"
+                        step="1"
+                        value={selectedRoadEntry.strokeWeight || 3}
+                        onChange={(e) => {
+                          const w = parseInt(e.target.value);
+                          polygonManagerRef.current?.setStyleField(selectedRoadEntry.id, 'strokeWeight', w);
+                          setSelectedRoadEntry({ ...selectedRoadEntry, strokeWeight: w });
+                        }}
+                        style={{ width: 80 }}
+                      />
+                      <span style={{ fontSize: '12px', color: '#fff', width: '24px' }}>
+                        {selectedRoadEntry.strokeWeight || 3}px
+                      </span>
+                    </div>
+                  </div>
+                  <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                    <span style={{ fontSize: '13px', color: '#94a3b8' }}>Points</span>
+                    <span style={{ fontSize: '12px', color: '#fff' }}>{selectedRoadEntry.gPolygon?.getPath()?.getLength() || 0}</span>
+                  </div>
+                </div>
+
+                <div className="poly-popup-actions">
+                  <button
+                    className="poly-popup-btn"
+                    onClick={() => {
+                      polygonManagerRef.current?.enterEditMode(selectedRoadEntry.id);
+                      setRoadPopupPos(null);
+                    }}
+                  >
+                    Edit Geometry
+                  </button>
+                  <button
+                    className="poly-popup-btn"
+                    onClick={() => {
+                      // Enter extend mode: set the extending ref and activate road tool
+                      extendingRoadIdRef.current = selectedRoadEntry.id;
+                      setRoadPopupPos(null);
+                      setActiveLandmarkTool('lm-road');
+                      setActiveTool('lm-road');
+                    }}
+                  >
+                    Extend Road
+                  </button>
+                  <button
+                    className="poly-popup-btn poly-popup-btn--danger"
+                    onClick={() => {
+                      polygonManagerRef.current?.deletePolygon(selectedRoadEntry.id);
+                      setSelectedRoadEntry(null);
+                      setRoadPopupPos(null);
+                    }}
+                  >
+                    Delete
+                  </button>
+                </div>
+                <button
+                  className="poly-popup-close"
+                  onClick={() => {
+                    polygonManagerRef.current?.deselect();
+                    setSelectedRoadEntry(null);
+                    setRoadPopupPos(null);
+                  }}
+                >×</button>
+              </div>
+            </OverlayView>
+          )}
+
           {/* GCP Map Markers */}
           {floorPlanMode === 'gcp' && gcpPoints.map((pt, i) => (
             <OverlayView
@@ -1679,30 +2060,69 @@ function MapWorkspaceInner() {
         </div>
       )}
 
+      {/* Road naming/classification modal — mirrors polygon modal exactly */}
+      {pendingRoad && (
+        <div
+          className="poly-modal-backdrop"
+          onMouseDown={(e) => { if (e.target === e.currentTarget) cancelPendingRoad(); }}
+        >
+          <div className="poly-modal" onMouseDown={(e) => e.stopPropagation()}>
+            <div className="poly-modal-header">Name this road</div>
+            <input
+              autoFocus
+              className="poly-popup-input"
+              type="text"
+              value={pendingRoadName}
+              onChange={(e) => setPendingRoadName(e.target.value)}
+              onKeyDown={(e) => {
+                if (e.key === 'Enter') confirmPendingRoad();
+                if (e.key === 'Escape') cancelPendingRoad();
+              }}
+              placeholder="Road name"
+            />
+            <div className="poly-modal-sublabel">Road or Bridge?</div>
+            <div className="pp-cats poly-modal-cats">
+              {['Road', 'Bridge'].map((cat) => (
+                <button
+                  key={cat}
+                  type="button"
+                  className={`pp-cat${pendingRoadCategory === cat ? ' pp-cat--active' : ''}`}
+                  onClick={() => setPendingRoadCategory(cat)}
+                >
+                  {cat}
+                </button>
+              ))}
+            </div>
+            <div className="poly-popup-actions poly-modal-actions">
+              <button className="poly-popup-btn" onClick={cancelPendingRoad}>Cancel</button>
+              <button className="poly-popup-btn poly-popup-btn--primary" onClick={confirmPendingRoad}>Done</button>
+            </div>
+          </div>
+        </div>
+      )}
+
       {/* Auto-Plot Review Mode Floating Panel */}
       {isAutoPlotReviewMode && (
         <div style={{
-          position: 'absolute', top: 20, left: '50%', transform: 'translateX(-50%)',
-          background: 'rgba(30, 41, 59, 0.95)', border: '1px solid rgba(255, 255, 255, 0.1)',
-          padding: '16px 24px', borderRadius: '12px', zIndex: 1000,
-          display: 'flex', alignItems: 'center', gap: '20px',
-          boxShadow: '0 8px 32px rgba(0,0,0,0.4)', backdropFilter: 'blur(10px)',
+          position: 'fixed', left: 360, top: 52,
+          background: '#1e293b', border: '1px solid rgba(255, 255, 255, 0.08)',
+          padding: '4px 8px 4px 12px', borderRadius: '6px', zIndex: 1000,
+          display: 'flex', flexDirection: 'row', alignItems: 'center', gap: '12px',
+          boxShadow: '0 4px 12px rgba(0,0,0,0.2)',
           color: 'white', fontFamily: 'Inter, sans-serif'
         }}>
-          <div>
-            <div style={{ fontSize: '15px', fontWeight: 600, marginBottom: '4px' }}>Review Detected Units</div>
-            <div style={{ fontSize: '13px', color: '#94a3b8' }}>
-              Delete false positives, edit vertices, or draw missing units.
-            </div>
+          <div style={{ fontSize: '13px', fontWeight: 500, color: '#e2e8f0', whiteSpace: 'nowrap' }}>
+            Review Detected Units
           </div>
-          <div style={{ display: 'flex', gap: '12px' }}>
+          <div style={{ display: 'flex', gap: '6px' }}>
             <button onClick={cancelAutoPlotUnits} style={{
-              background: 'transparent', border: '1px solid rgba(255,255,255,0.2)', color: 'white',
-              padding: '8px 16px', borderRadius: '6px', cursor: 'pointer', fontSize: '14px', fontWeight: 500
-            }}>Cancel</button>            <button onClick={confirmAutoPlotUnits} style={{
+              background: 'transparent', border: '1px solid rgba(255,255,255,0.15)', color: '#cbd5e1',
+              padding: '4px 10px', borderRadius: '4px', cursor: 'pointer', fontSize: '12px', fontWeight: 500
+            }}>Cancel</button>
+            <button onClick={confirmAutoPlotUnits} style={{
               background: '#00d4ff', border: 'none', color: '#0f172a',
-              padding: '8px 16px', borderRadius: '6px', cursor: 'pointer', fontSize: '14px', fontWeight: 600
-            }}>Confirm Units</button>
+              padding: '4px 10px', borderRadius: '4px', cursor: 'pointer', fontSize: '12px', fontWeight: 600
+            }}>Confirm</button>
           </div>
         </div>
       )}

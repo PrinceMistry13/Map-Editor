@@ -204,15 +204,15 @@ export default function PreviewMap() {
       projectData.roads?.forEach((road) => {
         featureOverlaysRef.current.roads.push(
           new GM.Polyline({
-            path: road.points,
-            strokeColor: road.lineColor,
-            strokeWeight: road.lineWidth,
+            path: road.points || road.path,
+            strokeColor: road.lineColor || road.color,
+            strokeWeight: road.lineWidth || road.strokeWeight || 3,
             strokeOpacity: 0.9,
             map,
             clickable: false,
           })
         );
-        road.points.forEach(pt => extendBounds(pt));
+        (road.points || road.path).forEach(pt => extendBounds(pt));
       });
 
       projectData.radii?.forEach((radius) => {

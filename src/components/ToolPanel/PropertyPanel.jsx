@@ -14,8 +14,8 @@ export default function PropertyPanel({ toolProps, setToolProps }) {
 
   const baseTool = activeTool.includes('-') ? activeTool.split('-').slice(1).join('-') : activeTool;
 
-  // Polygon and Pin tools — no side panel, interaction happens directly on the map
-  if (['polygon', 'pin'].includes(baseTool)) return null;
+  // Polygon, Pin, and Road tools — no side panel, interaction happens directly on the map
+  if (['polygon', 'pin', 'road'].includes(baseTool)) return null;
 
   // Partial updater per tool type
   const set = (tool) => (partial) =>
@@ -24,7 +24,7 @@ export default function PropertyPanel({ toolProps, setToolProps }) {
   return (
     <div className="pp-panel" id="pp-panel" aria-label="Tool properties">
       {baseTool === 'pin' && <PinPanel v={toolProps.pin} set={set('pin')} />}
-      {baseTool === 'road' && <RoadPanel v={toolProps.road} set={set('road')} />}
+
       {baseTool === 'radius' && <RadiusPanel v={toolProps.radius} set={set('radius')} />}
     </div>
   );
@@ -44,35 +44,6 @@ function PinPanel({ v, set }) {
   );
 }
 
-// ─── Road ─────────────────────────────────────────────────────────────────────
-function RoadPanel({ v, set }) {
-  return (
-    <>
-      <PpHeader>Road</PpHeader>
-      <PpRow label="Name">
-        <input id="pp-road-name" type="text" className="pp-text" placeholder="Road name"
-          value={v.roadName}
-          onChange={(e) => set({ roadName: e.target.value })} />
-      </PpRow>
-      <PpRow label="Color">
-        <input id="pp-road-color" type="color" className="pp-color" value={v.lineColor}
-          onChange={(e) => set({ lineColor: e.target.value })} />
-      </PpRow>
-      <PpRow label="Line W">
-        <input id="pp-road-lw" type="range" min="1" max="10" step="1" className="pp-slider"
-          value={v.lineWidth}
-          onChange={(e) => set({ lineWidth: Number(e.target.value) })} />
-        <span className="pp-val">{v.lineWidth}px</span>
-      </PpRow>
-      <PpRow label="Road W">
-        <input id="pp-road-rw" type="range" min="2" max="30" step="1" className="pp-slider"
-          value={v.roadWidth}
-          onChange={(e) => set({ roadWidth: Number(e.target.value) })} />
-        <span className="pp-val">{v.roadWidth}m</span>
-      </PpRow>
-    </>
-  );
-}
 
 // ─── Radius ───────────────────────────────────────────────────────────────────
 function RadiusPanel({ v, set }) {

@@ -9,14 +9,33 @@
   padding: 8px 16px;
   display: flex;
   align-items: center;
+  justify-content: center;
+  flex-wrap: wrap;
   gap: 16px;
   box-shadow: 0 4px 12px rgba(0, 0, 0, 0.3);
-  z-index: 50;
+  z-index: 250;
   color: #e2e8f0;
   font-family: inherit;
   font-size: 13px;
-  height: 52px;
+  min-height: 52px;
   box-sizing: border-box;
+  width: max-content;
+  max-width: 95vw;
+}
+
+@media (max-width: 1400px) {
+  .fp-bottom-panel {
+    gap: 8px;
+    padding: 6px 12px;
+  }
+}
+
+@media (max-width: 1200px) {
+  .fp-bottom-panel {
+    left: 370px;
+    transform: none;
+    max-width: calc(100vw - 400px);
+  }
 }
 
 .fp-bp-mode-switch {

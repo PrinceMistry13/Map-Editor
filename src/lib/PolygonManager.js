@@ -18,11 +18,13 @@ export default class PolygonManager {
     this.selectedId = null;
     this.isEditing = false;
     this.hoveredVertexIndex = null;
+    this.lastMouseLatLng = null;
   }
 
   getBaseZIndex(category) {
     if (category === 'project') return 10000;
     if (category === 'landmark') return 20000;
+    if (category === 'road' || category === 'bridge') return 25000;
     if (category === 'unit') return 30000;
     if (category === 'pending-unit') return 40000;
     return 10000;
@@ -35,14 +37,19 @@ export default class PolygonManager {
     else if (category === 'landmark') defaultColor = '#00CED1';
 
     const finalColor = color || defaultColor;
-    const gPolygon = new window.google.maps.Polygon({
+    const isLine = category === 'road' || category === 'bridge';
+    const GClass = isLine ? window.google.maps.Polyline : window.google.maps.Polygon;
+
+    const gPolygon = new GClass({
       map: this.map,
-      paths: path,
+      [isLine ? 'path' : 'paths']: path,
       strokeColor: finalColor,
-      strokeWeight: entryData.strokeWeight ?? 2,
-      fillColor: finalColor,
-      fillOpacity: entryData.fillOpacity ?? 0.12,
-      strokePosition: window.google.maps.StrokePosition.INSIDE,
+      strokeWeight: entryData.strokeWeight ?? (isLine ? 3 : 2),
+      ...(isLine ? {} : {
+        fillColor: finalColor,
+        fillOpacity: entryData.fillOpacity ?? 0.12,
+        strokePosition: window.google.maps.StrokePosition.INSIDE,
+      }),
       editable: false,
       clickable: true,
       zIndex: this.getBaseZIndex(category) + (++this.zCounter),
@@ -52,7 +59,7 @@ export default class PolygonManager {
 
     let pathSnapshotBefore = null;
     const pathObj = gPolygon.getPath();
-    
+
     entry.takeSnapshot = () => {
       pathSnapshotBefore = pathObj.getArray().map((ll) => ({ lat: ll.lat(), lng: ll.lng() }));
     };
@@ -86,33 +93,43 @@ export default class PolygonManager {
         return;
       }
       e.domEvent && e.domEvent.stopPropagation();
+      
+      // If we are already editing this very polygon/road, do not exit edit mode on click
+      // (e.g. clicking the stroke to add a vertex should not abort the edit session).
+      if (this.isEditing && this.selectedId === id) {
+        return;
+      }
+      
       const currentCategory = this.polygons.get(id)?.category || 'project';
       gPolygon.setOptions({ zIndex: this.getBaseZIndex(currentCategory) + (++this.zCounter) });
       this.select(id, e.latLng ? e.latLng.toJSON() : null);
     });
 
     const trackHover = (e) => {
+      if (e.latLng) {
+        this.lastMouseLatLng = e.latLng;
+      }
+      
       if (!this.isEditing || this.selectedId !== id) return;
+      if (!e.latLng || !window.google?.maps?.geometry?.spherical) return;
+
       const path = gPolygon.getPath();
       let minDist = Infinity;
       let closestIdx = null;
 
-      if (e.latLng && window.google?.maps?.geometry?.spherical) {
-        const zoom = this.map.getZoom();
-        const lat = e.latLng.lat();
-        // Meters per pixel at current latitude and zoom
-        const metersPerPx = (156543.03392 * Math.cos((lat * Math.PI) / 180)) / Math.pow(2, zoom);
-        // We want a threshold of ~25 pixels
-        const thresholdMeters = 25 * metersPerPx;
+      const zoom = this.map.getZoom();
+      const lat = e.latLng.lat();
+      const metersPerPx = (156543.03392 * Math.cos((lat * Math.PI) / 180)) / Math.pow(2, zoom);
+      const isLine = category === 'road' || category === 'bridge';
+      const thresholdMeters = (isLine ? 50 : 25) * metersPerPx;
 
-        path.forEach((latLng, i) => {
-          const distMeters = window.google.maps.geometry.spherical.computeDistanceBetween(e.latLng, latLng);
-          if (distMeters < thresholdMeters && distMeters < minDist) {
-            minDist = distMeters;
-            closestIdx = i;
-          }
-        });
-      }
+      path.forEach((latLng, i) => {
+        const distMeters = window.google.maps.geometry.spherical.computeDistanceBetween(e.latLng, latLng);
+        if (distMeters < thresholdMeters && distMeters < minDist) {
+          minDist = distMeters;
+          closestIdx = i;
+        }
+      });
       this.hoveredVertexIndex = closestIdx;
     };
 
@@ -123,14 +140,37 @@ export default class PolygonManager {
       trackHover(e);
     });
 
+    // Native right-click to delete vertex (highly reliable fallback/standard method)
+    gPolygon.addListener('rightclick', (e) => {
+      if (this.isEditing && this.selectedId === id && e.vertex != null) {
+        const pObj = gPolygon.getPath();
+        const currentCat = this.polygons.get(id)?.category || 'project';
+        const isRoad = currentCat === 'road' || currentCat === 'bridge';
+        
+        if (isRoad && pObj.getLength() <= 2) {
+          alert('A road needs at least 2 points.');
+          return;
+        } else if (!isRoad && pObj.getLength() <= 3) {
+          alert('A polygon must have at least 3 vertices.');
+          return;
+        }
+        
+        if (entry.takeSnapshot) entry.takeSnapshot();
+        pObj.removeAt(e.vertex);
+      }
+    });
+
     this.map.addListener('mousemove', trackHover);
 
     return entry;
   }
 
   loadPolygon(data) {
-    const path = data.path.map((p) => new window.google.maps.LatLng(p.lat, p.lng));
-    this.createPolygon(data.id, data.name, path, data.category || 'project', data.layerId || 'layer-1', data.color, data.metadata || {}, { fillOpacity: data.fillOpacity, strokeWeight: data.strokeWeight, visible: data.visible });
+    const rawPath = data.path || data.points || [];
+    const path = rawPath.map((p) => new window.google.maps.LatLng(p.lat, p.lng));
+    const color = data.color || data.lineColor;
+    const weight = data.strokeWeight || data.lineWidth;
+    this.createPolygon(data.id, data.name, path, data.category || 'project', data.layerId || 'layer-1', color, data.metadata || {}, { fillOpacity: data.fillOpacity, strokeWeight: weight, visible: data.visible });
   }
 
   // Bulk-restore from a saved project payload (replaces current polygons)
@@ -160,7 +200,11 @@ export default class PolygonManager {
     const entry = this.polygons.get(id);
     if (entry) {
       entry.gPolygon.setEditable(true);
-      entry.gPolygon.setOptions({ strokeColor: '#ffb020', fillColor: '#ffb020' });
+      if (entry.category !== 'road' && entry.category !== 'bridge') {
+        entry.gPolygon.setOptions({ strokeColor: '#ffb020', fillColor: '#ffb020' });
+      } else {
+        entry.gPolygon.setOptions({ strokeColor: '#ffb020' });
+      }
       this.isEditing = true;
       this.callbacks.onEditToggle && this.callbacks.onEditToggle(entry, true);
     }
@@ -171,7 +215,11 @@ export default class PolygonManager {
       const entry = this.polygons.get(this.selectedId);
       if (entry) {
         entry.gPolygon.setEditable(false);
-        entry.gPolygon.setOptions({ strokeColor: entry.color, fillColor: entry.color });
+        if (entry.category !== 'road' && entry.category !== 'bridge') {
+          entry.gPolygon.setOptions({ strokeColor: entry.color, fillColor: entry.color });
+        } else {
+          entry.gPolygon.setOptions({ strokeColor: entry.color });
+        }
       }
     }
     this.isEditing = false;
@@ -180,22 +228,53 @@ export default class PolygonManager {
   }
 
   handleDeleteKey(e) {
-    if (!this.isEditing || this.hoveredVertexIndex === null) return;
+    if (!this.isEditing) return;
     if (e.target.tagName === 'INPUT' || e.target.tagName === 'TEXTAREA') return;
 
     const entry = this.polygons.get(this.selectedId);
     if (!entry) return;
 
     const path = entry.gPolygon.getPath();
-    if (path.getLength() <= 3) {
-      alert('A polygon must have at least 3 vertices.');
-      return;
+    let targetIndex = this.hoveredVertexIndex;
+
+    // Fallback: If we lost the hover index due to mouse events stopping on vertex handles,
+    // recalculate it using the absolute last known mouse position on the map.
+    if (targetIndex === null && this.lastMouseLatLng && window.google?.maps?.geometry?.spherical) {
+      let minDist = Infinity;
+      const zoom = this.map.getZoom();
+      const lat = this.lastMouseLatLng.lat();
+      const metersPerPx = (156543.03392 * Math.cos((lat * Math.PI) / 180)) / Math.pow(2, zoom);
+      const isLine = entry.category === 'road' || entry.category === 'bridge';
+      const thresholdMeters = (isLine ? 50 : 25) * metersPerPx;
+
+      path.forEach((latLng, i) => {
+        const distMeters = window.google.maps.geometry.spherical.computeDistanceBetween(this.lastMouseLatLng, latLng);
+        if (distMeters < thresholdMeters && distMeters < minDist) {
+          minDist = distMeters;
+          targetIndex = i;
+        }
+      });
+    }
+
+    if (targetIndex === null) return;
+    
+    // Check minimum vertices based on type
+    if (entry.category === 'road' || entry.category === 'bridge') {
+      if (path.getLength() <= 2) {
+        alert('A road needs at least 2 points.');
+        return;
+      }
+    } else {
+      if (path.getLength() <= 3) {
+        alert('A polygon must have at least 3 vertices.');
+        return;
+      }
     }
 
     // Take snapshot manually before keyboard deletion so undo/redo has the correct 'before' state
     if (entry.takeSnapshot) entry.takeSnapshot();
 
-    path.removeAt(this.hoveredVertexIndex);
+    path.removeAt(targetIndex);
     this.hoveredVertexIndex = null; // reset after delete
   }
 
@@ -240,8 +319,8 @@ export default class PolygonManager {
         else if (cat === 'unit' || cat === 'pending-unit') color = '#ff6b6b';
       }
       const baseZ = this.getBaseZIndex(cat);
-      entry.gPolygon.setOptions({ 
-        strokeColor: color, 
+      entry.gPolygon.setOptions({
+        strokeColor: color,
         fillColor: color,
         zIndex: baseZ + (++this.zCounter)
       });
@@ -373,10 +452,10 @@ export default class PolygonManager {
   deletePolygon(id, skipHistory) {
     const entry = this.polygons.get(id);
     if (!entry) return;
-    
+
     // Save map order for undo to ensure array indices stay synced
     const mapKeys = Array.from(this.polygons.keys());
-    
+
     const path = entry.gPolygon.getPath().getArray().map((ll) => ({ lat: ll.lat(), lng: ll.lng() }));
     const { name, category } = entry;
     entry.gPolygon.setMap(null);
@@ -385,40 +464,40 @@ export default class PolygonManager {
       this.selectedId = null;
       this.callbacks.onSelect && this.callbacks.onSelect(null, null);
     }
-    
+
 
 
     if (!skipHistory) {
       this.callbacks.pushHistory && this.callbacks.pushHistory({
-        undo: () => { 
-           // 1. restore the deleted polygon
-           this.loadPolygon({ id, name, category, path, layerId: entry.layerId, color: entry.color, fillOpacity: entry.fillOpacity, strokeWeight: entry.strokeWeight, metadata: entry.metadata });
-           
+        undo: () => {
+          // 1. restore the deleted polygon
+          this.loadPolygon({ id, name, category, path, layerId: entry.layerId, color: entry.color, fillOpacity: entry.fillOpacity, strokeWeight: entry.strokeWeight, metadata: entry.metadata });
 
-           // 3. restore original Map insertion order
-           const restoredMap = new Map();
-           for (const k of mapKeys) {
-             if (this.polygons.has(k)) {
-               restoredMap.set(k, this.polygons.get(k));
-             }
-           }
-           this.polygons = restoredMap;
-           
-           this.callbacks.onChange && this.callbacks.onChange();
-           if (this.selectedId) {
-             const sel = this.polygons.get(this.selectedId);
-             if (sel) this.callbacks.onSelect && this.callbacks.onSelect({ ...sel });
-           }
+
+          // 3. restore original Map insertion order
+          const restoredMap = new Map();
+          for (const k of mapKeys) {
+            if (this.polygons.has(k)) {
+              restoredMap.set(k, this.polygons.get(k));
+            }
+          }
+          this.polygons = restoredMap;
+
+          this.callbacks.onChange && this.callbacks.onChange();
+          if (this.selectedId) {
+            const sel = this.polygons.get(this.selectedId);
+            if (sel) this.callbacks.onSelect && this.callbacks.onSelect({ ...sel });
+          }
         },
-        redo: () => { 
-           this.deletePolygon(id, true); 
+        redo: () => {
+          this.deletePolygon(id, true);
         },
       });
     }
     this.callbacks.onChange && this.callbacks.onChange();
     if (this.selectedId) {
-       const sel = this.polygons.get(this.selectedId);
-       if (sel) this.callbacks.onSelect && this.callbacks.onSelect({ ...sel });
+      const sel = this.polygons.get(this.selectedId);
+      if (sel) this.callbacks.onSelect && this.callbacks.onSelect({ ...sel });
     }
   }
 
@@ -427,6 +506,51 @@ export default class PolygonManager {
     if (!entry) return null;
     const path = entry.gPolygon.getPath().getArray();
     return { area: polygonArea(path), perimeter: polygonPerimeter(path) };
+  }
+
+  reorder(draggedId, targetId) {
+    if (draggedId === targetId) return;
+    const draggedEntry = this.polygons.get(draggedId);
+    const targetEntry = this.polygons.get(targetId);
+    if (!draggedEntry || !targetEntry) return;
+
+    const sameLayer = draggedEntry.layerId === targetEntry.layerId;
+    const bothLandmarks = draggedEntry.category === 'landmark' && targetEntry.category === 'landmark';
+
+    if (!sameLayer && !bothLandmarks) return;
+
+    const keys = Array.from(this.polygons.keys());
+    const draggedIdx = keys.indexOf(draggedId);
+    const targetIdx = keys.indexOf(targetId);
+
+    if (draggedIdx === -1 || targetIdx === -1) return;
+
+    keys.splice(draggedIdx, 1);
+    const newTargetIdx = keys.indexOf(targetId);
+
+    // Insert after the target if dragging down, before if dragging up
+    if (draggedIdx < targetIdx) {
+      keys.splice(newTargetIdx + 1, 0, draggedId);
+    } else {
+      keys.splice(newTargetIdx, 0, draggedId);
+    }
+
+    const newMap = new Map();
+    for (const key of keys) {
+      newMap.set(key, this.polygons.get(key));
+    }
+    this.polygons = newMap;
+
+    // Adjust zIndex to reflect new order
+    // Reverse iterate so top items get higher z-indexes
+    let zIdxCounter = 0;
+    for (const entry of this.polygons.values()) {
+      const base = this.getBaseZIndex(entry.category);
+      entry.gPolygon.setOptions({ zIndex: base + (++zIdxCounter) });
+    }
+    this.zCounter = Math.max(this.zCounter, zIdxCounter);
+
+    this.callbacks.onChange && this.callbacks.onChange();
   }
 
   // Real, exact geo-coordinates of every vertex actually plotted — straight
@@ -448,7 +572,7 @@ export default class PolygonManager {
   }
 
   getState() {
-    return Array.from(this.polygons.values()).map((entry) => ({
+    const all = Array.from(this.polygons.values()).map((entry) => ({
       id: entry.id,
       name: entry.name,
       category: entry.category || 'project',
@@ -460,6 +584,15 @@ export default class PolygonManager {
       metadata: entry.metadata || {},
       visible: entry.itemVisible !== false
     }));
+    return {
+      polygons: all.filter(p => p.category !== 'road' && p.category !== 'bridge'),
+      roads: all.filter(p => p.category === 'road' || p.category === 'bridge').map(r => ({
+        ...r,
+        points: r.path,
+        lineColor: r.color,
+        lineWidth: r.strokeWeight
+      })).map(({ path, color, strokeWeight, ...rest }) => rest)
+    };
   }
 
   clearAll() {
