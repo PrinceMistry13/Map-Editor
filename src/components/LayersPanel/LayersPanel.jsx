@@ -263,7 +263,7 @@ export default function LayersPanel({ tick = 0 }) {
   const getLayerChildren = (layerId) => {
     // Roads are now considered Landmarks and bypass regular layer tree sorting
     const polys = pmState.filter(f => f.layerId === layerId && f.category !== 'landmark' && f.category !== 'road' && f.category !== 'bridge').map(f => ({ ...f, type: 'polygon' }));
-    const pins = pnmState.filter(f => f.layerId === layerId).map(f => ({ ...f, type: 'pin' }));
+    const pins = pnmState.filter(f => f.layerId === layerId && f.category !== 'landmark').map(f => ({ ...f, type: 'pin' }));
     const fps = fpState.filter(f => f.layerId === layerId).map(f => ({ ...f, type: 'floorplan' }));
     return [...fps, ...polys, ...pins];
   };
@@ -274,8 +274,10 @@ export default function LayersPanel({ tick = 0 }) {
   const allRenderedChildren = [];
 
   const landmarkPolys = pmState.filter(f => f.category === 'landmark' || f.category === 'road' || f.category === 'bridge').map(f => ({ ...f, type: (f.category === 'road' || f.category === 'bridge') ? 'road' : 'polygon' }));
+  const landmarkPins = pnmState.filter(f => f.category === 'landmark').map(f => ({ ...f, type: 'pin' }));
+  
   if (expandedLayers['landmarks']) {
-    allRenderedChildren.push(...landmarkPolys);
+    allRenderedChildren.push(...landmarkPolys, ...landmarkPins);
   }
 
   layers.forEach(layer => {
@@ -347,12 +349,21 @@ export default function LayersPanel({ tick = 0 }) {
 
     if (isBulk === 'landmarks') {
       const landmarkPolys = pmState.filter(f => f.category === 'landmark' || f.category === 'road' || f.category === 'bridge');
-      const newState = !landmarkPolys.every(p => p.visible !== false);
+      const landmarkPins = pnmState.filter(f => f.category === 'landmark');
+      
+      const newState = !landmarkPolys.every(p => p.visible !== false) || !landmarkPins.every(p => p.visible !== false);
+      
       landmarkPolys.forEach(p => {
         const entry = polygonManagerRef.current?.polygons.get(p.id);
         if (entry) entry.itemVisible = newState;
       });
+      landmarkPins.forEach(p => {
+        const entry = pinManagerRef.current?.pins.get(p.id);
+        if (entry) entry.itemVisible = newState;
+      });
+
       if (polygonManagerRef.current) polygonManagerRef.current.callbacks.onChange();
+      if (pinManagerRef.current) pinManagerRef.current.callbacks.onChange();
       return;
     }
 
@@ -989,8 +1000,10 @@ export default function LayersPanel({ tick = 0 }) {
         })}
         {(() => {
           const landmarkPolys = pmState.filter(f => f.category === 'landmark' || f.category === 'road' || f.category === 'bridge').map(f => ({ ...f, type: (f.category === 'road' || f.category === 'bridge') ? 'road' : 'polygon' }));
+          const landmarkPins = pnmState.filter(f => f.category === 'landmark').map(f => ({ ...f, type: 'pin' }));
+          const allLandmarks = [...landmarkPolys, ...landmarkPins];
           const isExpanded = expandedLayers['landmarks'];
-          const allVisible = landmarkPolys.length > 0 && landmarkPolys.every(p => p.visible !== false);
+          const allVisible = allLandmarks.length > 0 && allLandmarks.every(p => p.visible !== false);
 
           return (
             <div className="lp-layer lp-layer-landmarks">
@@ -1015,7 +1028,7 @@ export default function LayersPanel({ tick = 0 }) {
                   <PolygonIcon />
                 </div>
                 <span style={{ fontSize: '13px', fontWeight: 600, color: '#e2e8f0', flexGrow: 1 }}>
-                  Landmarks ({landmarkPolys.length})
+                  Landmarks ({allLandmarks.length})
                 </span>
                 {(() => {
                   const folderId = 'landmarks';
@@ -1027,9 +1040,9 @@ export default function LayersPanel({ tick = 0 }) {
                     <div className="lp-menu-wrap" style={{ marginRight: 8 }}>
                       <ColorPickerPopover
                         color={color}
-                        onChange={(c) => handleColorChange(folderId, false, c, landmarkPolys)}
+                        onChange={(c) => handleColorChange(folderId, false, c, allLandmarks)}
                         styleMode={styleMode}
-                        onStyleModeChange={(newMode) => handleStyleModeToggle(folderId, false, newMode, color, landmarkPolys)}
+                        onStyleModeChange={(newMode) => handleStyleModeToggle(folderId, false, newMode, color, allLandmarks)}
                         triggerElement={
                           styleMode === 'uniform' ? null : (
                             <button
@@ -1047,7 +1060,7 @@ export default function LayersPanel({ tick = 0 }) {
 
                 <button
                   className={`lp-expand-btn ${isExpanded ? 'lp-expand-btn--expanded' : ''}`}
-                  style={{ visibility: landmarkPolys.length > 0 ? 'visible' : 'hidden' }}
+                  style={{ visibility: allLandmarks.length > 0 ? 'visible' : 'hidden' }}
                   onClick={(e) => { e.stopPropagation(); toggleExpand('landmarks', e); }}
                 >
                   <ChevronIcon />
@@ -1056,8 +1069,9 @@ export default function LayersPanel({ tick = 0 }) {
               {isExpanded && (() => {
                 const lmRoads = landmarkPolys.filter(p => p.type === 'road');
                 const lmPolys = landmarkPolys.filter(p => p.type === 'polygon');
+                const lmPins = landmarkPins;
 
-                const renderNestedFolder = (title, folderId, items, defaultColor) => {
+                const renderNestedFolder = (title, folderId, items, defaultColor, type) => {
                   if (items.length === 0) return null;
                   const isFolderExpanded = expandedLayers[folderId];
                   const allVisible = items.every(p => p.visible !== false);
@@ -1084,10 +1098,16 @@ export default function LayersPanel({ tick = 0 }) {
                             e.stopPropagation();
                             const newState = !allVisible;
                             items.forEach(p => {
-                              const entry = polygonManagerRef.current?.polygons.get(p.id);
-                              if (entry) entry.itemVisible = newState;
+                              if (p.type === 'pin') {
+                                const entry = pinManagerRef.current?.pins.get(p.id);
+                                if (entry) entry.itemVisible = newState;
+                              } else {
+                                const entry = polygonManagerRef.current?.polygons.get(p.id);
+                                if (entry) entry.itemVisible = newState;
+                              }
                             });
                             if (polygonManagerRef.current) polygonManagerRef.current.callbacks.onChange();
+                            if (pinManagerRef.current) pinManagerRef.current.callbacks.onChange();
                           }}
                           title={allVisible ? "Hide all" : "Show all"}
                         >
@@ -1135,8 +1155,9 @@ export default function LayersPanel({ tick = 0 }) {
 
                 return (
                   <>
-                    {renderNestedFolder('Roads', 'lm-roads', lmRoads, '#FF9800')}
-                    {renderNestedFolder('Polygons', 'lm-polygons', lmPolys, '#2ecc71')}
+                    {renderNestedFolder('Roads', 'lm-roads', lmRoads, '#FF9800', 'road')}
+                    {renderNestedFolder('Polygons', 'lm-polygons', lmPolys, '#2ecc71', 'polygon')}
+                    {renderNestedFolder('Pins', 'lm-pins', lmPins, '#00CED1', 'pin')}
                   </>
                 );
               })()}

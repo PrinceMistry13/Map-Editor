@@ -497,6 +497,7 @@ function MapWorkspaceInner() {
           setPinIsEditing(isEditing);
         },
         onChange: () => { setTick(t => t + 1); },
+        onPinPlaced: () => setActiveTool(null),
         pushHistory: pushThunk,
         getActiveTool: () => activeToolRef.current,
       });
@@ -1742,49 +1743,105 @@ function MapWorkspaceInner() {
                   placeholder="Pin Name"
                 />
                 <div className="poly-popup-cats-row" onMouseDown={(e) => e.stopPropagation()}>
-                  <span className="poly-popup-cats-label">Style</span>
-                  <div className="pp-cats">
+                  <span className="poly-popup-cats-label" style={{ width: '60px' }}>Category</span>
+                  <div className="pp-cats" style={{ flex: 1, display: 'flex' }}>
                     <button
                       type="button"
-                      className={`pp-cat${selectedPinEntry.styleMode !== 'custom' ? ' pp-cat--active' : ''}`}
-                      onClick={() => pinManagerRef.current?.setStyle(selectedPinEntry.id, 'default')}
+                      style={{ flex: 1 }}
+                      className={`pp-cat${selectedPinEntry.category === 'project' ? ' pp-cat--active' : ''}`}
+                      onClick={() => pinManagerRef.current?.setCategory(selectedPinEntry.id, 'project')}
                     >
-                      Default
+                      Project
                     </button>
                     <button
                       type="button"
-                      className={`pp-cat${selectedPinEntry.styleMode === 'custom' ? ' pp-cat--active' : ''}`}
-                      onClick={() => pinManagerRef.current?.setStyle(selectedPinEntry.id, 'custom')}
+                      style={{ flex: 1 }}
+                      className={`pp-cat${selectedPinEntry.category === 'landmark' ? ' pp-cat--active' : ''}`}
+                      onClick={() => pinManagerRef.current?.setCategory(selectedPinEntry.id, 'landmark', selectedPinEntry.landmarkType || 'brts')}
                     >
-                      Custom
+                      Landmark
                     </button>
                   </div>
                 </div>
-                <div className="poly-popup-metrics">
-                  <div style={{ display: 'flex', flexDirection: 'column', gap: '8px', width: '100%' }}>
-                    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-                      <span>Color</span>
-                      <ColorPickerPopover
-                        color={selectedPinEntry.color}
-                        onChange={(c) => pinManagerRef.current?.setColor(selectedPinEntry.id, c)}
-                      />
+
+                {selectedPinEntry.category === 'project' && (
+                  <div className="poly-popup-cats-row" onMouseDown={(e) => e.stopPropagation()}>
+                    <span className="poly-popup-cats-label" style={{ width: '60px' }}>Style</span>
+                    <div className="pp-cats" style={{ flex: 1, display: 'flex' }}>
+                      <button
+                        type="button"
+                        style={{ flex: 1 }}
+                        className={`pp-cat${selectedPinEntry.styleMode !== 'custom' ? ' pp-cat--active' : ''}`}
+                        onClick={() => pinManagerRef.current?.setStyle(selectedPinEntry.id, 'default')}
+                      >
+                        Default
+                      </button>
+                      <button
+                        type="button"
+                        style={{ flex: 1 }}
+                        className={`pp-cat${selectedPinEntry.styleMode === 'custom' ? ' pp-cat--active' : ''}`}
+                        onClick={() => pinManagerRef.current?.setStyle(selectedPinEntry.id, 'custom')}
+                      >
+                        Custom
+                      </button>
                     </div>
-                    {selectedPinEntry.styleMode === 'custom' && (
-                      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-                        <span>Image</span>
-                        <label className="poly-popup-btn" style={{ padding: '4px 10px', margin: 0, cursor: 'pointer' }}>
-                          Upload...
-                          <input
-                            type="file"
-                            accept="image/*"
-                            style={{ display: 'none' }}
-                            onChange={(e) => handlePinImageFile(e, selectedPinEntry.id)}
-                          />
-                        </label>
-                      </div>
-                    )}
+                  </div>
+                )}
+
+                {selectedPinEntry.category === 'landmark' && (
+                  <div className="poly-popup-cats-row" onMouseDown={(e) => e.stopPropagation()}>
+                    <span className="poly-popup-cats-label" style={{ width: '60px' }}>Type</span>
+                    <select
+                      className="poly-popup-input"
+                      style={{ flex: 1, margin: 0, padding: '4px 8px', fontSize: '12px', height: '24px', backgroundColor: 'rgba(4, 6, 12, 0.35)', color: '#fff', border: '1px solid rgba(255, 255, 255, 0.06)', borderRadius: '8px' }}
+                      value={selectedPinEntry.landmarkType || 'brts'}
+                      onChange={(e) => pinManagerRef.current?.setCategory(selectedPinEntry.id, 'landmark', e.target.value)}
+                    >
+                      <option style={{ background: '#0a0e1c', color: '#fff' }} value="brts">BRTS</option>
+                      <option style={{ background: '#0a0e1c', color: '#fff' }} value="metro">Metro</option>
+                      <option style={{ background: '#0a0e1c', color: '#fff' }} value="railway">Railway</option>
+                      <option style={{ background: '#0a0e1c', color: '#fff' }} value="roads">Roads</option>
+                      <option style={{ background: '#0a0e1c', color: '#fff' }} value="bridges">Bridges</option>
+                      <option style={{ background: '#0a0e1c', color: '#fff' }} value="circle">Circle</option>
+                      <option style={{ background: '#0a0e1c', color: '#fff' }} value="school">School</option>
+                      <option style={{ background: '#0a0e1c', color: '#fff' }} value="college">College</option>
+                      <option style={{ background: '#0a0e1c', color: '#fff' }} value="hospital">Hospital</option>
+                      <option style={{ background: '#0a0e1c', color: '#fff' }} value="grocery">Grocery & Shopping Centre</option>
+                      <option style={{ background: '#0a0e1c', color: '#fff' }} value="garden">Garden</option>
+                      <option style={{ background: '#0a0e1c', color: '#fff' }} value="lake">Lake</option>
+                      <option style={{ background: '#0a0e1c', color: '#fff' }} value="temple">Temple</option>
+                      <option style={{ background: '#0a0e1c', color: '#fff' }} value="multiplex">Multiplex</option>
+                      <option style={{ background: '#0a0e1c', color: '#fff' }} value="police">Police Stations</option>
+                      <option style={{ background: '#0a0e1c', color: '#fff' }} value="textile">Textile Market</option>
+                    </select>
+                  </div>
+                )}
+
+                <div className="poly-popup-cats-row" onMouseDown={(e) => e.stopPropagation()}>
+                  <span className="poly-popup-cats-label" style={{ width: '60px' }}>Color</span>
+                  <div style={{ flex: 1, display: 'flex', justifyContent: 'flex-end' }}>
+                    <ColorPickerPopover
+                      color={selectedPinEntry.color}
+                      onChange={(c) => pinManagerRef.current?.setColor(selectedPinEntry.id, c)}
+                    />
                   </div>
                 </div>
+                {selectedPinEntry.styleMode === 'custom' && selectedPinEntry.category === 'project' && (
+                  <div className="poly-popup-cats-row" onMouseDown={(e) => e.stopPropagation()}>
+                    <span className="poly-popup-cats-label" style={{ width: '60px' }}>Image</span>
+                    <div style={{ flex: 1, display: 'flex', justifyContent: 'flex-end' }}>
+                      <label className="poly-popup-btn" style={{ padding: '4px 10px', margin: 0, cursor: 'pointer', flex: 'none' }}>
+                        Upload...
+                        <input
+                          type="file"
+                          accept="image/*"
+                          style={{ display: 'none' }}
+                          onChange={(e) => handlePinImageFile(e, selectedPinEntry.id)}
+                        />
+                      </label>
+                    </div>
+                  </div>
+                )}
                 <div className="poly-popup-actions">
                   <button
                     className={`poly-popup-btn ${pinIsEditing ? 'poly-popup-btn--active' : ''}`}
