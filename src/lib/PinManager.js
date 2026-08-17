@@ -67,9 +67,10 @@ export default class PinManager {
         marker.addListener('dragend', () => {
             // Exact geo-coord fetched straight off the marker after drop.
             const after = marker.getPosition().toJSON();
+            entry.position = after;
             this.callbacks.pushHistory && this.callbacks.pushHistory({
-                undo: () => { marker.setPosition(dragBefore); if (this.selectedId === id) this.callbacks.onSelect && this.callbacks.onSelect({ ...entry }, dragBefore); },
-                redo: () => { marker.setPosition(after); if (this.selectedId === id) this.callbacks.onSelect && this.callbacks.onSelect({ ...entry }, after); },
+                undo: () => { marker.setPosition(dragBefore); entry.position = dragBefore; if (this.selectedId === id) this.callbacks.onSelect && this.callbacks.onSelect({ ...entry }, dragBefore); },
+                redo: () => { marker.setPosition(after); entry.position = after; if (this.selectedId === id) this.callbacks.onSelect && this.callbacks.onSelect({ ...entry }, after); },
             });
             this.callbacks.onChange && this.callbacks.onChange();
             // Reposition popup to the new spot AND refresh coords readout.
