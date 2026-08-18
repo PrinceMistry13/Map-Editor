@@ -29,11 +29,19 @@ export default function GCPSplitPanel() {
     setIsDragging(true);
     hasMoved.current = false;
     dragStart.current = { x: e.clientX - pan.x, y: e.clientY - pan.y };
-    e.target.setPointerCapture(e.pointerId);
+    try {
+      e.target.setPointerCapture(e.pointerId);
+    } catch (err) {}
   };
 
   const handlePointerMove = (e) => {
     if (!isDragging) return;
+    
+    // Safety check: if mouse button is released outside and we re-enter, stop dragging
+    if (e.pointerType === 'mouse' && e.buttons === 0) {
+      handlePointerUp(e);
+      return;
+    }
     
     if (Math.abs(e.clientX - (dragStart.current.x + pan.x)) > 3 || 
         Math.abs(e.clientY - (dragStart.current.y + pan.y)) > 3) {
@@ -48,16 +56,36 @@ export default function GCPSplitPanel() {
 
   const handlePointerUp = (e) => {
     setIsDragging(false);
-    e.target.releasePointerCapture(e.pointerId);
+    try {
+      e.target.releasePointerCapture(e.pointerId);
+    } catch (err) {}
     
-    if (!hasMoved.current) {
+    if (!hasMoved.current && e.type === 'pointerup') {
       handleImageClick(e);
     }
   };
 
   const handleWheel = (e) => {
     const zoomFactor = e.deltaY < 0 ? 1.1 : 1 / 1.1;
-    setZoom(z => Math.min(Math.max(0.1, z * zoomFactor), 15));
+    const newZoom = Math.min(Math.max(0.1, zoom * zoomFactor), 15);
+    
+    if (newZoom === zoom) return;
+
+    // Get cursor position relative to the center of the image container
+    const rect = e.currentTarget.getBoundingClientRect();
+    const centerX = rect.left + rect.width / 2;
+    const centerY = rect.top + rect.height / 2;
+    
+    const mouseX = e.clientX - centerX;
+    const mouseY = e.clientY - centerY;
+
+    // Calculate new pan to keep the point under the cursor stationary
+    const scaleRatio = newZoom / zoom;
+    const newPanX = mouseX - (mouseX - pan.x) * scaleRatio;
+    const newPanY = mouseY - (mouseY - pan.y) * scaleRatio;
+
+    setZoom(newZoom);
+    setPan({ x: newPanX, y: newPanY });
   };
 
   const handleImageClick = (e) => {
@@ -138,6 +166,8 @@ export default function GCPSplitPanel() {
         onPointerDown={handlePointerDown}
         onPointerMove={handlePointerMove}
         onPointerUp={handlePointerUp}
+        onPointerCancel={handlePointerUp}
+        onPointerLeave={handlePointerUp}
       >
         <div className="gcp-zoom-controls" style={{ position: 'absolute', top: 10, right: 10, zIndex: 100, display: 'flex', gap: '4px' }}>
           <button type="button" onClick={() => setZoom(z => Math.min(z * 1.2, 15))} style={{ padding: '2px 8px', cursor: 'pointer' }}>+</button>
@@ -160,6 +190,7 @@ export default function GCPSplitPanel() {
             alt="Floor Plan" 
             className={pendingImgPt ? 'gcp-img waiting' : 'gcp-img'}
             style={{ width: '100%', height: '100%', display: 'block' }}
+            draggable={false}
           />
           {/* Render markers for points on image */}
           {gcpPoints.map((pt, i) => (

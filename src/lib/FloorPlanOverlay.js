@@ -95,6 +95,16 @@ export function createFloorPlanOverlayClass() {
 
     draw() {
       if (!this.div) return;
+      
+      if (this.mode === 'gcp') {
+        this.div.style.display = 'none';
+        this.eventDiv.style.display = 'none';
+        return;
+      } else {
+        this.div.style.display = '';
+        this.eventDiv.style.display = '';
+      }
+
       const projection = this.getProjection();
       if (!projection) return;
       
