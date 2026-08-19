@@ -195,6 +195,7 @@ const generateKMLString = (data, exportMode = 'kml') => {
         </LineStyle>
         <PolyStyle>
           <color>${kmlFillColor}</color>
+          <fill>0</fill>
         </PolyStyle>
       </Style>`;
         }
@@ -204,9 +205,8 @@ const generateKMLString = (data, exportMode = 'kml') => {
     <Placemark>
       <name>${poly.name || `Polygon ${i + 1}`}</name>${styleStr}
       <Polygon>
+        <tessellate>1</tessellate>
         <altitudeMode>${altMode}</altitudeMode>
-        <gx:drawOrder>${drawOrder}</gx:drawOrder>
-        <extrude>0</extrude>
         <outerBoundaryIs>
           <LinearRing>
             <coordinates>${coords}</coordinates>
@@ -307,6 +307,7 @@ const generateKMLString = (data, exportMode = 'kml') => {
     <Placemark>
       <name>Radius ${i + 1} Ring ${j + 1}</name>
       <LineString>
+        <tessellate>1</tessellate>
         <altitudeMode>clampToGround</altitudeMode>
         <coordinates>${coords.join(' ')}</coordinates>
       </LineString>
