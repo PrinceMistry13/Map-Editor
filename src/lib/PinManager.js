@@ -45,7 +45,7 @@ export default class PinManager {
         const marker = new window.google.maps.Marker({
             position, 
             map: this.map, 
-            draggable: true,
+            draggable: false,
             zIndex: 100,
             icon: pinSvgIcon(color, styleMode === 'custom' ? imageDataUrl : null, category, landmarkType),
         });

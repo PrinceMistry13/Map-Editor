@@ -27,6 +27,9 @@
 .preview-lp-header {
   padding: 16px;
   border-bottom: 1px solid rgba(255, 255, 255, 0.09);
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
 }
 
 .preview-lp-title {
@@ -34,6 +37,28 @@
   font-size: 15px;
   font-weight: 600;
   letter-spacing: 0.02em;
+}
+
+.preview-download-btn {
+  background: rgba(139, 92, 246, 0.2);
+  color: #c4b5fd;
+  border: 1px solid rgba(139, 92, 246, 0.3);
+  border-radius: 4px;
+  padding: 4px 10px;
+  font-size: 12px;
+  font-weight: 500;
+  cursor: pointer;
+  transition: all 0.2s;
+}
+
+.preview-download-btn:hover {
+  background: rgba(139, 92, 246, 0.3);
+  color: #fff;
+}
+
+.preview-download-btn:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
 }
 
 .preview-lp-content {
@@ -55,6 +80,7 @@
   align-items: center;
   height: 36px;
   gap: 8px;
+  cursor: pointer;
 }
 
 .preview-lp-toggle-btn {
@@ -144,11 +170,21 @@
   color: #fff;
 }
 
+.preview-lp-child-icon {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 16px;
+  height: 16px;
+  color: rgba(255, 255, 255, 0.5);
+}
+
 .preview-lp-child-name {
   font-size: 12px;
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
+  flex: 1;
 }
 
 .preview-loading {

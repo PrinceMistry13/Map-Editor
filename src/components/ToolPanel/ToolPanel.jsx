@@ -164,27 +164,19 @@ const generateKMLString = (data, exportMode = 'kml') => {
       if (!poly.path || poly.path.length < 3) return;
 
       let drawOrder = 1;
-      let altitude = 0;
-      let altMode = 'clampToGround';
+      const altMode = 'clampToGround';
 
       if (poly.category === 'project') {
-        altitude = 2;
-        altMode = 'relativeToGround';
+        // no-op
       } else if (poly.category === 'landmark') {
-        altitude = 3;
-        altMode = 'relativeToGround';
         drawOrder = 2;
       } else if (poly.category === 'unit') {
-        altitude = 4;
-        altMode = 'relativeToGround';
         drawOrder = 3;
       } else if (poly.category === 'pending-unit') {
-        altitude = 4;
-        altMode = 'relativeToGround';
         drawOrder = 4;
       }
 
-      const coords = [...poly.path, poly.path[0]].map(p => `${p.lng},${p.lat},${altitude}`).join(' ');
+      const coords = [...poly.path, poly.path[0]].map(p => `${p.lng},${p.lat},0`).join(' ');
 
       let styleStr = '';
       if (poly.color) {
@@ -288,6 +280,7 @@ const generateKMLString = (data, exportMode = 'kml') => {
     <Placemark>
       <name>${pin.name || `Pin ${i + 1}`}</name>${styleStr}
       <Point>
+        <altitudeMode>clampToGround</altitudeMode>
         <coordinates>${pin.position.lng},${pin.position.lat},0</coordinates>
       </Point>
     </Placemark>`;
@@ -314,6 +307,7 @@ const generateKMLString = (data, exportMode = 'kml') => {
     <Placemark>
       <name>Radius ${i + 1} Ring ${j + 1}</name>
       <LineString>
+        <altitudeMode>clampToGround</altitudeMode>
         <coordinates>${coords.join(' ')}</coordinates>
       </LineString>
     </Placemark>`;
@@ -341,6 +335,7 @@ const generateKMLString = (data, exportMode = 'kml') => {
       <GroundOverlay>
         <name>${name}</name>
         <gx:drawOrder>0</gx:drawOrder>
+        <gx:altitudeMode>clampToSeaFloor</gx:altitudeMode>
         <Icon>
           <href>${href}</href>
         </Icon>
@@ -360,6 +355,7 @@ const generateKMLString = (data, exportMode = 'kml') => {
       <GroundOverlay>
         <name>${name}</name>
         <gx:drawOrder>0</gx:drawOrder>
+        <gx:altitudeMode>clampToSeaFloor</gx:altitudeMode>
         <ExtendedData>
           <Data name="isDistorted">
             <value>${isDistortedStr}</value>
@@ -383,6 +379,7 @@ const generateKMLString = (data, exportMode = 'kml') => {
       <GroundOverlay>
         <name>${name}</name>
         <gx:drawOrder>0</gx:drawOrder>
+        <gx:altitudeMode>clampToSeaFloor</gx:altitudeMode>
         <Icon>
           <href>${href}</href>
         </Icon>
@@ -575,7 +572,8 @@ export default function ToolPanel() {
     getExportProject,
     floorPlanManagerRef,
     polygonManagerRef,
-    pinManagerRef
+    pinManagerRef,
+    activeLayerId
   } = useWorkspace();
   const [exportMenuOpen, setExportMenuOpen] = useState(false);
   const [saveBundleDialogOpen, setSaveBundleDialogOpen] = useState(false);
@@ -755,6 +753,253 @@ export default function ToolPanel() {
     }
   };
 
+  const processKMLDoc = async (doc, zip) => {
+    let minLat = 90, maxLat = -90, minLng = 180, maxLng = -180;
+    let hasBounds = false;
+
+    const updateBounds = (lat, lng) => {
+      if (lat < minLat) minLat = lat;
+      if (lat > maxLat) maxLat = lat;
+      if (lng < minLng) minLng = lng;
+      if (lng > maxLng) maxLng = lng;
+      hasBounds = true;
+    };
+
+    const groundOverlays = doc.getElementsByTagName('GroundOverlay');
+    const floorPlanMap = {}; // Maps KML name to fp.id for folder grouping
+    for (let i = 0; i < groundOverlays.length; i++) {
+      const go = groundOverlays[i];
+      const goName = go.getElementsByTagName('name')[0]?.textContent?.trim();
+      const href = go.getElementsByTagName('href')[0]?.textContent;
+      let blobUrl = null;
+
+      if (href) {
+        if (zip) {
+          const imageFile = zip.file(href);
+          if (imageFile) {
+            const imgBlob = await imageFile.async('blob');
+            blobUrl = URL.createObjectURL(imgBlob);
+          }
+        } else {
+          blobUrl = href;
+        }
+      }
+
+      let rotation = 0;
+      let isDistortedFlag = null;
+      let scale = undefined;
+      const extData = go.getElementsByTagName('ExtendedData')[0];
+      if (extData) {
+        const dataNodes = extData.getElementsByTagName('Data');
+        for (let d = 0; d < dataNodes.length; d++) {
+          const dName = dataNodes[d].getAttribute('name');
+          const dValue = dataNodes[d].getElementsByTagName('value')[0]?.textContent;
+          if (dName === 'isDistorted') {
+            isDistortedFlag = dValue === 'true';
+          } else if (dName === 'rotation') {
+            rotation = parseFloat(dValue || 0);
+          } else if (dName === 'scale') {
+            scale = parseFloat(dValue || 1);
+          }
+        }
+      }
+
+      const latLonQuad = go.getElementsByTagName('gx:LatLonQuad')[0] || go.getElementsByTagName('LatLonQuad')[0];
+      const latLonBox = go.getElementsByTagName('LatLonBox')[0];
+      let corners = null;
+      let distortedCorners = null;
+      let bounds = null;
+
+      if (latLonQuad) {
+        const coordsStr = latLonQuad.getElementsByTagName('coordinates')[0]?.textContent;
+        if (coordsStr) {
+          const pts = coordsStr.trim().split(/\s+/).map(p => {
+            const [lng, lat] = p.split(',').map(Number);
+            return { lat, lng };
+          });
+          if (pts.length >= 4) {
+            distortedCorners = { sw: pts[0], se: pts[1], ne: pts[2], nw: pts[3] };
+            corners = distortedCorners;
+
+            let minLatQ = 90, maxLatQ = -90, minLngQ = 180, maxLngQ = -180;
+            pts.forEach(pt => {
+              updateBounds(pt.lat, pt.lng);
+              if (pt.lat < minLatQ) minLatQ = pt.lat;
+              if (pt.lat > maxLatQ) maxLatQ = pt.lat;
+              if (pt.lng < minLngQ) minLngQ = pt.lng;
+              if (pt.lng > maxLngQ) maxLngQ = pt.lng;
+            });
+            bounds = { ne: { lat: maxLatQ, lng: maxLngQ }, sw: { lat: minLatQ, lng: minLngQ } };
+
+            if (isDistortedFlag === false) {
+              distortedCorners = null;
+            }
+          }
+        }
+      } else if (latLonBox) {
+        const n = parseFloat(latLonBox.getElementsByTagName('north')[0]?.textContent || 0);
+        const s = parseFloat(latLonBox.getElementsByTagName('south')[0]?.textContent || 0);
+        const e = parseFloat(latLonBox.getElementsByTagName('east')[0]?.textContent || 0);
+        const w = parseFloat(latLonBox.getElementsByTagName('west')[0]?.textContent || 0);
+        rotation = parseFloat(latLonBox.getElementsByTagName('rotation')[0]?.textContent || 0);
+
+        bounds = { ne: { lat: n, lng: e }, sw: { lat: s, lng: w } };
+        corners = { sw: { lat: s, lng: w }, se: { lat: s, lng: e }, ne: { lat: n, lng: e }, nw: { lat: n, lng: w } };
+        updateBounds(n, e);
+        updateBounds(s, w);
+      }
+
+      if (blobUrl && corners && floorPlanManagerRef.current) {
+        const id = 'fp-' + Date.now() + '-' + i;
+        if (goName) floorPlanMap[goName] = id;
+
+        // Use addFloorPlan to await image load, then lock
+        const center = {
+          lat: (bounds.sw.lat + bounds.ne.lat) / 2,
+          lng: (bounds.sw.lng + bounds.ne.lng) / 2
+        };
+        const fpm = floorPlanManagerRef.current;
+        await fpm.addFloorPlan(id, blobUrl, center, scale, rotation, 1, undefined, activeLayerId, distortedCorners, goName || `Floor Plan ${i + 1}`);
+        fpm.toggleLock(id); // Triggers boundary reset correctly
+      }
+    }
+
+    const placemarks = doc.getElementsByTagName('Placemark');
+    for (let i = 0; i < placemarks.length; i++) {
+      const pm = placemarks[i];
+      const name = pm.getElementsByTagName('name')[0]?.textContent || `Imported ${i}`;
+
+      // Check if it's inside a folder to match with a floorplan
+      let floorPlanId = null;
+      if (pm.parentNode && (pm.parentNode.tagName === 'Folder' || pm.parentNode.localName === 'Folder' || pm.parentNode.nodeName === 'Folder')) {
+        const folderName = pm.parentNode.getElementsByTagName('name')[0]?.textContent?.trim();
+        if (folderName && floorPlanMap[folderName]) {
+          floorPlanId = floorPlanMap[folderName];
+        }
+      }
+
+      // Parse colors from style
+      const extractColor = (styleNode) => {
+        if (!styleNode) return null;
+        const colorNode = styleNode.getElementsByTagName('color')[0];
+        if (!colorNode) return null;
+        const aabbggrr = colorNode.textContent.trim();
+        if (aabbggrr.length >= 8) {
+          const bb = aabbggrr.substring(2, 4);
+          const gg = aabbggrr.substring(4, 6);
+          const rr = aabbggrr.substring(6, 8);
+          return `#${rr}${gg}${bb}`;
+        }
+        return null;
+      };
+
+      let polyColor = extractColor(pm.getElementsByTagName('PolyStyle')[0])
+        || extractColor(pm.getElementsByTagName('LineStyle')[0])
+        || '#ff6b6b';
+
+      const polygon = pm.getElementsByTagName('Polygon')[0];
+      if (polygon) {
+        const coordsStr = polygon.getElementsByTagName('coordinates')[0]?.textContent;
+        if (coordsStr) {
+          const path = coordsStr.trim().split(/\s+/).filter(Boolean).map(p => {
+            const [lng, lat] = p.split(',').map(Number);
+            if (!isNaN(lat) && !isNaN(lng)) updateBounds(lat, lng);
+            return { lat, lng };
+          }).filter(p => !isNaN(p.lat) && !isNaN(p.lng));
+
+          if (path.length > 0) {
+            const altMode = polygon.getElementsByTagName('altitudeMode')[0]?.textContent;
+            const drawOrder = parseInt(polygon.getElementsByTagName('gx:drawOrder')[0]?.textContent || '1');
+            let category = 'project';
+            if (altMode === 'relativeToGround' && drawOrder === 2) category = 'landmark';
+            else if (altMode === 'relativeToGround' && drawOrder === 3) category = 'unit';
+            else if (altMode === 'relativeToGround' && drawOrder === 4) category = 'pending-unit';
+
+            const isBoundary = category === 'project';
+            const id = (isBoundary && floorPlanId) ? `floorplan-boundary-${floorPlanId}` : 'poly-' + Date.now() + '-' + i;
+            const metadata = floorPlanId ? { floorPlanId } : undefined;
+            polygonManagerRef.current?.loadPolygon({
+              id, name, category, path, color: polyColor, metadata, layerId: activeLayerId
+            });
+          }
+        }
+      }
+
+      const lineString = pm.getElementsByTagName('LineString')[0];
+      if (lineString) {
+        const coordsStr = lineString.getElementsByTagName('coordinates')[0]?.textContent;
+        if (coordsStr) {
+          const path = coordsStr.trim().split(/\s+/).filter(Boolean).map(p => {
+            const [lng, lat] = p.split(',').map(Number);
+            if (!isNaN(lat) && !isNaN(lng)) updateBounds(lat, lng);
+            return { lat, lng };
+          }).filter(p => !isNaN(p.lat) && !isNaN(p.lng));
+
+          if (path.length > 0) {
+            const id = 'road-' + Date.now() + '-' + i;
+            // Parse color/width if present in style, else default
+            const metadata = floorPlanId ? { floorPlanId } : undefined;
+            let roadColor = extractColor(pm.getElementsByTagName('LineStyle')[0]) || '#FF9800';
+            polygonManagerRef.current?.loadPolygon({
+              id, name, category: 'road', path, color: roadColor, strokeWeight: 3, metadata, layerId: activeLayerId
+            });
+          }
+        }
+      }
+
+      const point = pm.getElementsByTagName('Point')[0];
+      if (point) {
+        const coordsStr = point.getElementsByTagName('coordinates')[0]?.textContent;
+        if (coordsStr) {
+          const [lng, lat] = coordsStr.trim().split(',').map(Number);
+          if (!isNaN(lat) && !isNaN(lng)) {
+            updateBounds(lat, lng);
+
+            let imageDataUrl = null;
+            const href = pm.getElementsByTagName('href')[0]?.textContent;
+            if (href) {
+              if (zip) {
+                const imageFile = zip.file(href);
+                if (imageFile) {
+                  const imgBlob = await imageFile.async('blob');
+                  imageDataUrl = URL.createObjectURL(imgBlob);
+                }
+              } else {
+                imageDataUrl = href;
+              }
+            }
+
+            let pinColor = extractColor(pm.getElementsByTagName('IconStyle')[0]) || '#00CED1';
+
+            const id = 'pin-' + Date.now() + '-' + i;
+            const metadata = floorPlanId ? { floorPlanId } : undefined;
+            pinManagerRef.current?.loadPin({
+              id, name, color: pinColor, position: { lat, lng }, styleMode: imageDataUrl ? 'custom' : 'default', imageDataUrl, metadata, layerId: activeLayerId
+            });
+          }
+        }
+      }
+    }
+
+    const map = polygonManagerRef.current?.map || floorPlanManagerRef.current?.map;
+    if (map && window.google?.maps) {
+      const lookAt = doc.getElementsByTagName('LookAt')[0];
+      const camera = doc.getElementsByTagName('Camera')[0];
+      const viewNode = lookAt || camera;
+      if (viewNode) {
+        const lat = parseFloat(viewNode.getElementsByTagName('latitude')[0]?.textContent || 0);
+        const lng = parseFloat(viewNode.getElementsByTagName('longitude')[0]?.textContent || 0);
+        map.panTo({ lat, lng });
+      } else if (hasBounds) {
+        const bnd = new window.google.maps.LatLngBounds(
+          new window.google.maps.LatLng(minLat, minLng),
+          new window.google.maps.LatLng(maxLat, maxLng)
+        );
+        map.fitBounds(bnd);
+      }
+    }
+  };
+
   const handleImportKMZ = (e) => {
     const file = e.target.files[0];
     if (!file) return;
@@ -780,241 +1025,7 @@ export default function ToolPanel() {
         const parser = new DOMParser();
         const doc = parser.parseFromString(kmlText, 'text/xml');
 
-        let minLat = 90, maxLat = -90, minLng = 180, maxLng = -180;
-        let hasBounds = false;
-
-        const updateBounds = (lat, lng) => {
-          if (lat < minLat) minLat = lat;
-          if (lat > maxLat) maxLat = lat;
-          if (lng < minLng) minLng = lng;
-          if (lng > maxLng) maxLng = lng;
-          hasBounds = true;
-        };
-
-        const groundOverlays = doc.getElementsByTagName('GroundOverlay');
-        const floorPlanMap = {}; // Maps KML name to fp.id for folder grouping
-        for (let i = 0; i < groundOverlays.length; i++) {
-          const go = groundOverlays[i];
-          const goName = go.getElementsByTagName('name')[0]?.textContent?.trim();
-          const href = go.getElementsByTagName('href')[0]?.textContent;
-          let blobUrl = null;
-
-          if (href) {
-            const imageFile = zip.file(href);
-            if (imageFile) {
-              const imgBlob = await imageFile.async('blob');
-              blobUrl = URL.createObjectURL(imgBlob);
-            }
-          }
-
-          let rotation = 0;
-          let isDistortedFlag = null;
-          let scale = undefined;
-          const extData = go.getElementsByTagName('ExtendedData')[0];
-          if (extData) {
-            const dataNodes = extData.getElementsByTagName('Data');
-            for (let d = 0; d < dataNodes.length; d++) {
-              const dName = dataNodes[d].getAttribute('name');
-              const dValue = dataNodes[d].getElementsByTagName('value')[0]?.textContent;
-              if (dName === 'isDistorted') {
-                isDistortedFlag = dValue === 'true';
-              } else if (dName === 'rotation') {
-                rotation = parseFloat(dValue || 0);
-              } else if (dName === 'scale') {
-                scale = parseFloat(dValue || 1);
-              }
-            }
-          }
-
-          const latLonQuad = go.getElementsByTagName('gx:LatLonQuad')[0] || go.getElementsByTagName('LatLonQuad')[0];
-          const latLonBox = go.getElementsByTagName('LatLonBox')[0];
-          let corners = null;
-          let distortedCorners = null;
-          let bounds = null;
-
-          if (latLonQuad) {
-            const coordsStr = latLonQuad.getElementsByTagName('coordinates')[0]?.textContent;
-            if (coordsStr) {
-              const pts = coordsStr.trim().split(/\s+/).map(p => {
-                const [lng, lat] = p.split(',').map(Number);
-                return { lat, lng };
-              });
-              if (pts.length >= 4) {
-                distortedCorners = { sw: pts[0], se: pts[1], ne: pts[2], nw: pts[3] };
-                corners = distortedCorners;
-
-                let minLatQ = 90, maxLatQ = -90, minLngQ = 180, maxLngQ = -180;
-                pts.forEach(pt => {
-                  updateBounds(pt.lat, pt.lng);
-                  if (pt.lat < minLatQ) minLatQ = pt.lat;
-                  if (pt.lat > maxLatQ) maxLatQ = pt.lat;
-                  if (pt.lng < minLngQ) minLngQ = pt.lng;
-                  if (pt.lng > maxLngQ) maxLngQ = pt.lng;
-                });
-                bounds = { ne: { lat: maxLatQ, lng: maxLngQ }, sw: { lat: minLatQ, lng: minLngQ } };
-
-                if (isDistortedFlag === false) {
-                  distortedCorners = null;
-                }
-              }
-            }
-          } else if (latLonBox) {
-            const n = parseFloat(latLonBox.getElementsByTagName('north')[0]?.textContent || 0);
-            const s = parseFloat(latLonBox.getElementsByTagName('south')[0]?.textContent || 0);
-            const e = parseFloat(latLonBox.getElementsByTagName('east')[0]?.textContent || 0);
-            const w = parseFloat(latLonBox.getElementsByTagName('west')[0]?.textContent || 0);
-            rotation = parseFloat(latLonBox.getElementsByTagName('rotation')[0]?.textContent || 0);
-
-            bounds = { ne: { lat: n, lng: e }, sw: { lat: s, lng: w } };
-            corners = { sw: { lat: s, lng: w }, se: { lat: s, lng: e }, ne: { lat: n, lng: e }, nw: { lat: n, lng: w } };
-            updateBounds(n, e);
-            updateBounds(s, w);
-          }
-
-          if (blobUrl && corners && floorPlanManagerRef.current) {
-            const id = 'fp-' + Date.now() + '-' + i;
-            if (goName) floorPlanMap[goName] = id;
-
-            // Use addFloorPlan to await image load, then lock
-            const center = {
-              lat: (bounds.sw.lat + bounds.ne.lat) / 2,
-              lng: (bounds.sw.lng + bounds.ne.lng) / 2
-            };
-            const fpm = floorPlanManagerRef.current;
-            await fpm.addFloorPlan(id, blobUrl, center, scale, rotation, 1, undefined, 'layer-1', distortedCorners, goName || `Floor Plan ${i + 1}`);
-            fpm.toggleLock(id); // Triggers boundary reset correctly
-          }
-        }
-
-        const placemarks = doc.getElementsByTagName('Placemark');
-        for (let i = 0; i < placemarks.length; i++) {
-          const pm = placemarks[i];
-          const name = pm.getElementsByTagName('name')[0]?.textContent || `Imported ${i}`;
-
-          // Check if it's inside a folder to match with a floorplan
-          let floorPlanId = null;
-          if (pm.parentNode && (pm.parentNode.tagName === 'Folder' || pm.parentNode.localName === 'Folder' || pm.parentNode.nodeName === 'Folder')) {
-            const folderName = pm.parentNode.getElementsByTagName('name')[0]?.textContent?.trim();
-            if (folderName && floorPlanMap[folderName]) {
-              floorPlanId = floorPlanMap[folderName];
-            }
-          }
-
-          // Parse colors from style
-          const extractColor = (styleNode) => {
-            if (!styleNode) return null;
-            const colorNode = styleNode.getElementsByTagName('color')[0];
-            if (!colorNode) return null;
-            const aabbggrr = colorNode.textContent.trim();
-            if (aabbggrr.length >= 8) {
-              const bb = aabbggrr.substring(2, 4);
-              const gg = aabbggrr.substring(4, 6);
-              const rr = aabbggrr.substring(6, 8);
-              return `#${rr}${gg}${bb}`;
-            }
-            return null;
-          };
-
-          let polyColor = extractColor(pm.getElementsByTagName('PolyStyle')[0])
-            || extractColor(pm.getElementsByTagName('LineStyle')[0])
-            || '#ff6b6b';
-
-          const polygon = pm.getElementsByTagName('Polygon')[0];
-          if (polygon) {
-            const coordsStr = polygon.getElementsByTagName('coordinates')[0]?.textContent;
-            if (coordsStr) {
-              const path = coordsStr.trim().split(/\s+/).filter(Boolean).map(p => {
-                const [lng, lat] = p.split(',').map(Number);
-                if (!isNaN(lat) && !isNaN(lng)) updateBounds(lat, lng);
-                return { lat, lng };
-              }).filter(p => !isNaN(p.lat) && !isNaN(p.lng));
-
-              if (path.length > 0) {
-                const altMode = polygon.getElementsByTagName('altitudeMode')[0]?.textContent;
-                const drawOrder = parseInt(polygon.getElementsByTagName('gx:drawOrder')[0]?.textContent || '1');
-                let category = 'project';
-                if (altMode === 'relativeToGround' && drawOrder === 2) category = 'landmark';
-                else if (altMode === 'relativeToGround' && drawOrder === 3) category = 'unit';
-                else if (altMode === 'relativeToGround' && drawOrder === 4) category = 'pending-unit';
-
-                const isBoundary = category === 'project';
-                const id = (isBoundary && floorPlanId) ? `floorplan-boundary-${floorPlanId}` : 'poly-' + Date.now() + '-' + i;
-                const metadata = floorPlanId ? { floorPlanId } : undefined;
-                polygonManagerRef.current?.loadPolygon({
-                  id, name, category, path, color: polyColor, metadata
-                });
-              }
-            }
-          }
-
-          const lineString = pm.getElementsByTagName('LineString')[0];
-          if (lineString) {
-            const coordsStr = lineString.getElementsByTagName('coordinates')[0]?.textContent;
-            if (coordsStr) {
-              const path = coordsStr.trim().split(/\s+/).filter(Boolean).map(p => {
-                const [lng, lat] = p.split(',').map(Number);
-                if (!isNaN(lat) && !isNaN(lng)) updateBounds(lat, lng);
-                return { lat, lng };
-              }).filter(p => !isNaN(p.lat) && !isNaN(p.lng));
-
-              if (path.length > 0) {
-                const id = 'road-' + Date.now() + '-' + i;
-                // Parse color/width if present in style, else default
-                const metadata = floorPlanId ? { floorPlanId } : undefined;
-                let roadColor = extractColor(pm.getElementsByTagName('LineStyle')[0]) || '#FF9800';
-                polygonManagerRef.current?.loadPolygon({
-                  id, name, category: 'road', path, color: roadColor, strokeWeight: 3, metadata
-                });
-              }
-            }
-          }
-
-          const point = pm.getElementsByTagName('Point')[0];
-          if (point) {
-            const coordsStr = point.getElementsByTagName('coordinates')[0]?.textContent;
-            if (coordsStr) {
-              const [lng, lat] = coordsStr.trim().split(',').map(Number);
-              if (!isNaN(lat) && !isNaN(lng)) {
-                updateBounds(lat, lng);
-
-                let imageDataUrl = null;
-                const href = pm.getElementsByTagName('href')[0]?.textContent;
-                if (href) {
-                  const imageFile = zip.file(href);
-                  if (imageFile) {
-                    const imgBlob = await imageFile.async('blob');
-                    imageDataUrl = URL.createObjectURL(imgBlob);
-                  }
-                }
-
-                const id = 'pin-' + Date.now() + '-' + i;
-                const metadata = floorPlanId ? { floorPlanId } : undefined;
-                pinManagerRef.current?.loadPin({
-                  id, name, position: { lat, lng }, styleMode: imageDataUrl ? 'custom' : 'default', imageDataUrl, metadata
-                });
-              }
-            }
-          }
-        }
-
-        const map = polygonManagerRef.current?.map || floorPlanManagerRef.current?.map;
-        if (map && window.google?.maps) {
-          const lookAt = doc.getElementsByTagName('LookAt')[0];
-          const camera = doc.getElementsByTagName('Camera')[0];
-          const viewNode = lookAt || camera;
-          if (viewNode) {
-            const lat = parseFloat(viewNode.getElementsByTagName('latitude')[0]?.textContent || 0);
-            const lng = parseFloat(viewNode.getElementsByTagName('longitude')[0]?.textContent || 0);
-            map.panTo({ lat, lng });
-          } else if (hasBounds) {
-            const bnd = new window.google.maps.LatLngBounds(
-              new window.google.maps.LatLng(minLat, minLng),
-              new window.google.maps.LatLng(maxLat, maxLng)
-            );
-            map.fitBounds(bnd);
-          }
-        }
-
+        await processKMLDoc(doc, zip);
       } catch (e) {
         console.error("KMZ import failed", e);
         alert("Failed to import KMZ");
@@ -1023,6 +1034,28 @@ export default function ToolPanel() {
       e.target.value = null;
     };
     reader.readAsArrayBuffer(file);
+  };
+
+  const handleImportKML = (e) => {
+    const file = e.target.files[0];
+    if (!file) return;
+
+    const reader = new FileReader();
+    reader.onload = async (ev) => {
+      try {
+        const kmlText = ev.target.result;
+        const parser = new DOMParser();
+        const doc = parser.parseFromString(kmlText, 'text/xml');
+
+        await processKMLDoc(doc, null);
+      } catch (e) {
+        console.error("KML import failed", e);
+        alert("Failed to import KML");
+      }
+
+      e.target.value = null;
+    };
+    reader.readAsText(file);
   };
 
   const handleExportProjectTagJSON = () => {
@@ -1242,6 +1275,12 @@ export default function ToolPanel() {
           Icon={FolderIcon}
           onClick={() => document.getElementById('kmz-upload-input')?.click()}
         />
+        <ToolBtn
+          id="import-kml"
+          label="Import KML"
+          Icon={FolderIcon}
+          onClick={() => document.getElementById('kml-upload-input')?.click()}
+        />
       </div>
 
       {/* Modals */}
@@ -1260,6 +1299,13 @@ export default function ToolPanel() {
         accept=".kmz"
         style={{ display: 'none' }}
         onChange={handleImportKMZ}
+      />
+      <input
+        type="file"
+        id="kml-upload-input"
+        accept=".kml"
+        style={{ display: 'none' }}
+        onChange={handleImportKML}
       />
     </div>
   );
