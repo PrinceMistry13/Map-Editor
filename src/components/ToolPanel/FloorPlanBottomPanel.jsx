@@ -4,12 +4,39 @@ import './FloorPlanBottomPanel.css';
 import '../Dialogs/Dialogs.css'; // For the confirmation dialog styles
 
 export default function FloorPlanBottomPanel() {
-  const { floorPlanMode, setFloorPlanMode, selectedFloorPlanId, setSelectedFloorPlanId, floorPlanManagerRef, beginAutoPlotReview } = useWorkspace();
+  const { floorPlanMode, setFloorPlanMode, selectedFloorPlanId, setSelectedFloorPlanId, floorPlanManagerRef, beginAutoPlotReview, pushThunk } = useWorkspace();
   const [showDeleteConfirm, setShowDeleteConfirm] = useState(false);
   const [isAutoPlotting, setIsAutoPlotting] = useState(false);
-  
+
+  // floorPlanMode is never persisted/exported (not part of FloorPlanManager's
+  // getState()) — it's pure transient UI state, so making the switch itself
+  // undoable is safe. Undo/redo just call setFloorPlanMode again, which is
+  // the same state that drives the `active` class on these buttons, so the
+  // highlight automatically follows undo/redo with no extra wiring needed.
+  //
+  // Leaving Distort for Manual on a floor plan that's actually distorted is
+  // special-cased: the warped pixels get baked into a new base image first
+  // (via FloorPlanManager.bakeDistortToManual, which pushes its own separate
+  // undo/redo step for the image/geometry swap), so manual mode continues
+  // with the distorted content itself rather than the original straight
+  // image resized to an approximate rectangle.
+  const switchMode = async (newMode) => {
+    const prevMode = floorPlanMode;
+    if (prevMode === newMode) return;
+
+    if (newMode === 'manual' && prevMode === 'distort' && fpEntry?.overlay?.distortedCorners) {
+      await floorPlanManagerRef.current?.bakeDistortToManual(selectedFloorPlanId);
+    }
+
+    setFloorPlanMode(newMode);
+    pushThunk && pushThunk({
+      undo: () => setFloorPlanMode(prevMode),
+      redo: () => setFloorPlanMode(newMode),
+    });
+  };
+
   const fpEntry = selectedFloorPlanId ? floorPlanManagerRef.current?.overlays.get(selectedFloorPlanId) : null;
-  
+
   const [opacity, setOpacity] = React.useState(fpEntry?.overlay.opacity ?? 1);
   const [isLocked, setIsLocked] = React.useState(fpEntry?.overlay.isLocked ?? false);
   const [isAspectLocked, setIsAspectLocked] = React.useState(fpEntry?.overlay.isAspectLocked ?? true);
@@ -74,75 +101,75 @@ export default function FloorPlanBottomPanel() {
   return (
     <>
       <div className="fp-bottom-panel">
-      <div className="fp-bp-mode-switch">
-        <button
-          className={`fp-bp-btn ${floorPlanMode === 'manual' ? 'active' : ''}`}
-          onClick={() => setFloorPlanMode('manual')}
-        >
-          Manual
-        </button>
-        <button
-          className={`fp-bp-btn ${floorPlanMode === 'gcp' ? 'active' : ''}`}
-          onClick={() => setFloorPlanMode('gcp')}
-        >
-          GCP Mode
-        </button>
-        <button
-          className={`fp-bp-btn ${floorPlanMode === 'distort' ? 'active' : ''}`}
-          onClick={() => setFloorPlanMode('distort')}
-        >
-          Distort
-        </button>
-      </div>
-
-      <div className="fp-bp-divider" />
-
-      {/* Container for all dynamic content to ensure constant width */}
-      <div style={{ display: 'flex', alignItems: 'center', position: 'relative' }}>
-        
-        {/* Manual controls (always rendered to reserve width, but hidden when not in manual mode/distort) */}
-        <div style={{
-          display: 'flex', 
-          alignItems: 'center', 
-          gap: '16px',
-          visibility: (floorPlanMode === 'manual' || floorPlanMode === 'distort') ? 'visible' : 'hidden',
-          pointerEvents: (floorPlanMode === 'manual' || floorPlanMode === 'distort') ? 'auto' : 'none'
-        }}>
-          <div className="fp-bp-group">
-            <span className="fp-bp-label">Opacity</span>
-            <input type="range" min="0" max="1" step="0.01" value={opacity} onChange={handleOpacityChange} />
-          </div>
-          
-          <div className="fp-bp-group">
-            <label className="fp-bp-checkbox-label">
-              <input type="checkbox" checked={isAspectLocked} onChange={handleToggleAspectLock} />
-              Lock Aspect
-            </label>
-          </div>
-          
-          <div className="fp-bp-group fp-bp-actions">
-            <button className="fp-bp-action-btn" onClick={handleReset}>Reset</button>
-            <button className="fp-bp-action-btn" onClick={handleToggleLock}>{isLocked ? "Unlock" : "Lock"}</button>
-            <button className="fp-bp-action-btn" onClick={handleAutoPlotClick} disabled={!isLocked || isAutoPlotting}>
-              {isAutoPlotting ? 'Plotting...' : 'Auto-Plot Units'}
-            </button>
-            <button className="fp-bp-action-btn" onClick={handleSave}>Save</button>
-          </div>
+        <div className="fp-bp-mode-switch">
+          <button
+            className={`fp-bp-btn ${floorPlanMode === 'manual' ? 'active' : ''}`}
+            onClick={() => switchMode('manual')}
+          >
+            Manual
+          </button>
+          <button
+            className={`fp-bp-btn ${floorPlanMode === 'gcp' ? 'active' : ''}`}
+            onClick={() => switchMode('gcp')}
+          >
+            GCP Mode
+          </button>
+          <button
+            className={`fp-bp-btn ${floorPlanMode === 'distort' ? 'active' : ''}`}
+            onClick={() => switchMode('distort')}
+          >
+            Distort
+          </button>
         </div>
 
-        {/* Hint overlays */}
-        {floorPlanMode === 'gcp' && (
-          <div className="fp-bp-gcp-hint" style={{ position: 'absolute', left: 0, top: '50%', transform: 'translateY(-50%)' }}>
-            Use the left panel to place Ground Control Points.
-          </div>
-        )}
-      </div>
+        <div className="fp-bp-divider" />
 
-      {/* Always visible actions */}
-      <div className="fp-bp-group fp-bp-actions">
-        <button className="fp-bp-action-btn fp-bp-action-btn--danger" onClick={handleDeleteClick}>Delete</button>
-        <button className="fp-bp-action-btn fp-bp-action-btn--primary" onClick={() => setSelectedFloorPlanId(null)}>Done</button>
-      </div>
+        {/* Container for all dynamic content to ensure constant width */}
+        <div style={{ display: 'flex', alignItems: 'center', position: 'relative' }}>
+
+          {/* Manual controls (always rendered to reserve width, but hidden when not in manual mode/distort) */}
+          <div style={{
+            display: 'flex',
+            alignItems: 'center',
+            gap: '16px',
+            visibility: (floorPlanMode === 'manual' || floorPlanMode === 'distort') ? 'visible' : 'hidden',
+            pointerEvents: (floorPlanMode === 'manual' || floorPlanMode === 'distort') ? 'auto' : 'none'
+          }}>
+            <div className="fp-bp-group">
+              <span className="fp-bp-label">Opacity</span>
+              <input type="range" min="0" max="1" step="0.01" value={opacity} onChange={handleOpacityChange} />
+            </div>
+
+            <div className="fp-bp-group">
+              <label className="fp-bp-checkbox-label">
+                <input type="checkbox" checked={isAspectLocked} onChange={handleToggleAspectLock} />
+                Lock Aspect
+              </label>
+            </div>
+
+            <div className="fp-bp-group fp-bp-actions">
+              <button className="fp-bp-action-btn" onClick={handleReset}>Reset</button>
+              <button className="fp-bp-action-btn" onClick={handleToggleLock}>{isLocked ? "Unlock" : "Lock"}</button>
+              <button className="fp-bp-action-btn" onClick={handleAutoPlotClick} disabled={!isLocked || isAutoPlotting}>
+                {isAutoPlotting ? 'Plotting...' : 'Auto-Plot Units'}
+              </button>
+              <button className="fp-bp-action-btn" onClick={handleSave}>Save</button>
+            </div>
+          </div>
+
+          {/* Hint overlays */}
+          {floorPlanMode === 'gcp' && (
+            <div className="fp-bp-gcp-hint" style={{ position: 'absolute', left: 0, top: '50%', transform: 'translateY(-50%)' }}>
+              Use the left panel to place Ground Control Points.
+            </div>
+          )}
+        </div>
+
+        {/* Always visible actions */}
+        <div className="fp-bp-group fp-bp-actions">
+          <button className="fp-bp-action-btn fp-bp-action-btn--danger" onClick={handleDeleteClick}>Delete</button>
+          <button className="fp-bp-action-btn fp-bp-action-btn--primary" onClick={() => setSelectedFloorPlanId(null)}>Done</button>
+        </div>
 
       </div>
 

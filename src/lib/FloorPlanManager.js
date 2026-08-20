@@ -1,6 +1,7 @@
 import { createFloorPlanOverlayClass } from './FloorPlanOverlay';
 import { extractForegroundMask, traceContour, simplifyPolygon } from '../utils/imageBoundary';
 import { solveHomography, mapPoint } from '../utils/homography';
+import { bakeFloorplanImage } from '../utils/imageBake';
 
 export default class FloorPlanManager {
   constructor(map, callbacks = {}) {
@@ -213,16 +214,16 @@ export default class FloorPlanManager {
       if (overlay.distortedCorners) {
         const dc = overlay.distortedCorners;
         const src = [
-          {x: 0, y: 0},
-          {x: W, y: 0},
-          {x: W, y: H},
-          {x: 0, y: H}
+          { x: 0, y: 0 },
+          { x: W, y: 0 },
+          { x: W, y: H },
+          { x: 0, y: H }
         ];
         const dst = [
-          {x: dc.nw.lng, y: dc.nw.lat},
-          {x: dc.ne.lng, y: dc.ne.lat},
-          {x: dc.se.lng, y: dc.se.lat},
-          {x: dc.sw.lng, y: dc.sw.lat}
+          { x: dc.nw.lng, y: dc.nw.lat },
+          { x: dc.ne.lng, y: dc.ne.lat },
+          { x: dc.se.lng, y: dc.se.lat },
+          { x: dc.sw.lng, y: dc.sw.lat }
         ];
         H_matrix = solveHomography(src, dst);
       }
@@ -257,16 +258,16 @@ export default class FloorPlanManager {
     if (overlay.distortedCorners) {
       const dc = overlay.distortedCorners;
       const src = [
-        {x: 0, y: 0},
-        {x: W, y: 0},
-        {x: W, y: H},
-        {x: 0, y: H}
+        { x: 0, y: 0 },
+        { x: W, y: 0 },
+        { x: W, y: H },
+        { x: 0, y: H }
       ];
       const dst = [
-        {x: dc.nw.lng, y: dc.nw.lat},
-        {x: dc.ne.lng, y: dc.ne.lat},
-        {x: dc.se.lng, y: dc.se.lat},
-        {x: dc.sw.lng, y: dc.sw.lat}
+        { x: dc.nw.lng, y: dc.nw.lat },
+        { x: dc.ne.lng, y: dc.ne.lat },
+        { x: dc.se.lng, y: dc.se.lat },
+        { x: dc.sw.lng, y: dc.sw.lat }
       ];
       H_matrix = solveHomography(src, dst);
     }
@@ -329,16 +330,16 @@ export default class FloorPlanManager {
     if (overlay.distortedCorners) {
       const dc = overlay.distortedCorners;
       const src = [
-        {x: 0, y: 0},
-        {x: W, y: 0},
-        {x: W, y: H},
-        {x: 0, y: H}
+        { x: 0, y: 0 },
+        { x: W, y: 0 },
+        { x: W, y: H },
+        { x: 0, y: H }
       ];
       const dst = [
-        {x: dc.nw.lng, y: dc.nw.lat},
-        {x: dc.ne.lng, y: dc.ne.lat},
-        {x: dc.se.lng, y: dc.se.lat},
-        {x: dc.sw.lng, y: dc.sw.lat}
+        { x: dc.nw.lng, y: dc.nw.lat },
+        { x: dc.ne.lng, y: dc.ne.lat },
+        { x: dc.se.lng, y: dc.se.lat },
+        { x: dc.sw.lng, y: dc.sw.lat }
       ];
       // Swap src and dst to solve for the inverse homography
       H_inv_matrix = solveHomography(dst, src);
@@ -487,7 +488,7 @@ export default class FloorPlanManager {
 
     keys.splice(draggedIdx, 1);
     const newTargetIdx = keys.indexOf(targetId);
-    
+
     if (draggedIdx < targetIdx) {
       keys.splice(newTargetIdx + 1, 0, draggedId);
     } else {
@@ -499,11 +500,11 @@ export default class FloorPlanManager {
       newMap.set(key, this.overlays.get(key));
     }
     this.overlays = newMap;
-    
+
     // Reverse iterate so top items get higher z-indexes
     let zIdxCounter = 0;
     for (const entry of this.overlays.values()) {
-        entry.overlay.update({ zIndex: ++zIdxCounter });
+      entry.overlay.update({ zIndex: ++zIdxCounter });
     }
 
     this.callbacks.onChange && this.callbacks.onChange();
@@ -620,7 +621,7 @@ export default class FloorPlanManager {
       img.onload = () => {
         entry.url = newUrl;
         entry.imgEl = img;
-        
+
         if (entry.overlay && entry.overlay.img) {
           entry.overlay.url = newUrl;
           entry.overlay.img.src = newUrl;
@@ -632,5 +633,123 @@ export default class FloorPlanManager {
       img.onerror = reject;
       img.src = newUrl;
     });
+  }
+
+  // Switching a distorted floor plan back to manual mode: bake the current
+  // warped/tilted pixels into a new flat base image (instead of just fitting
+  // a rectangle around the ORIGINAL undistorted image, which would silently
+  // discard the distortion). bakeFloorplanImage's distort branch lays its
+  // output out true-north/east-aligned (not rotated to the quad's own tilt),
+  // so the new overlay's footprint must be the plain axis-aligned bounding
+  // box of the distorted corners — rotationDeg 0 — to line up with it exactly.
+  async bakeDistortToManual(id) {
+    const entry = this.overlays.get(id);
+    if (!entry) return;
+    const { overlay } = entry;
+    if (!overlay.distortedCorners) return; // nothing to bake
+
+    let img = entry.imgEl;
+    if (!img || !img.complete || img.naturalWidth === 0) {
+      img = await new Promise((resolve, reject) => {
+        const newImg = new Image();
+        newImg.crossOrigin = 'anonymous';
+        newImg.onload = () => resolve(newImg);
+        newImg.onerror = reject;
+        newImg.src = entry.url;
+      });
+    }
+
+    const blob = await bakeFloorplanImage(img, {
+      distortedCorners: overlay.distortedCorners,
+      rotation: overlay.rotationDeg,
+      opacity: 1, // bake at full opacity — overlay.opacity still controls display separately
+    });
+    if (!blob) return; // baking failed (e.g. tainted canvas) — leave the floor plan as-is
+
+    const newUrl = URL.createObjectURL(blob);
+    const bakedImg = await new Promise((resolve, reject) => {
+      const bi = new Image();
+      bi.onload = () => resolve(bi);
+      bi.onerror = reject;
+      bi.src = newUrl;
+    });
+
+    // Axis-aligned bounding box of the distorted corners in Mercator meters —
+    // matches how bakeFloorplanImage lays out its own output canvas.
+    const R = 6378137;
+    const toMerc = (lat, lng) => ({
+      x: (lng * Math.PI * R) / 180,
+      y: R * Math.log(Math.tan(Math.PI / 4 + (lat * Math.PI) / 360)),
+    });
+    const dc = overlay.distortedCorners;
+    const pts = [toMerc(dc.nw.lat, dc.nw.lng), toMerc(dc.ne.lat, dc.ne.lng), toMerc(dc.se.lat, dc.se.lng), toMerc(dc.sw.lat, dc.sw.lng)];
+    const minX = Math.min(...pts.map(p => p.x));
+    const maxX = Math.max(...pts.map(p => p.x));
+    const minY = Math.min(...pts.map(p => p.y));
+    const maxY = Math.max(...pts.map(p => p.y));
+
+    const widthMeters = maxX - minX;
+    const heightMeters = maxY - minY;
+    const cxMerc = (minX + maxX) / 2;
+    const cyMerc = (minY + maxY) / 2;
+    const lng = (cxMerc * 180) / (Math.PI * R);
+    const lat = (180 / Math.PI) * (2 * Math.atan(Math.exp(cyMerc / R)) - Math.PI / 2);
+
+    const startState = {
+      origCenter: { ...overlay.center },
+      origWidth: overlay.widthMeters,
+      origHeight: overlay.heightMeters,
+      origRot: overlay.rotationDeg,
+      origDistortedCorners: { ...overlay.distortedCorners },
+    };
+    const origUrl = entry.url;
+    const origImgEl = entry.imgEl;
+    const origOriginalWidth = entry.originalWidth;
+    const origOriginalHeight = entry.originalHeight;
+
+    const endState = { center: { lat, lng }, widthMeters, heightMeters, rotationDeg: 0, distortedCorners: null };
+
+    const applyBaked = () => {
+      entry.url = newUrl;
+      entry.imgEl = bakedImg;
+      entry.originalWidth = bakedImg.naturalWidth;
+      entry.originalHeight = bakedImg.naturalHeight;
+      overlay.url = newUrl;
+      if (overlay.img) overlay.img.src = newUrl;
+      // Clear distortedCorners BEFORE the mode/geometry update below, so the
+      // distort→manual fit-rectangle logic in FloorPlanOverlay.update() (a
+      // lighter fallback for the non-baked case) doesn't fire and clobber
+      // the precise baked values being set here.
+      overlay.distortedCorners = null;
+      overlay.update({ center: { lat, lng }, widthMeters, heightMeters, rotationDeg: 0, mode: 'manual' });
+    };
+
+    applyBaked();
+
+    this.callbacks.pushHistory && this.callbacks.pushHistory({
+      undo: () => {
+        entry.url = origUrl;
+        entry.imgEl = origImgEl;
+        entry.originalWidth = origOriginalWidth;
+        entry.originalHeight = origOriginalHeight;
+        overlay.url = origUrl;
+        if (overlay.img) overlay.img.src = origUrl;
+        overlay.update({
+          center: startState.origCenter,
+          widthMeters: startState.origWidth,
+          heightMeters: startState.origHeight,
+          rotationDeg: startState.origRot,
+          distortedCorners: startState.origDistortedCorners,
+          mode: 'distort',
+        });
+        this.callbacks.onChange && this.callbacks.onChange(id);
+      },
+      redo: () => {
+        applyBaked();
+        this.callbacks.onChange && this.callbacks.onChange(id);
+      },
+    });
+
+    this.callbacks.onChange && this.callbacks.onChange(id);
   }
 }

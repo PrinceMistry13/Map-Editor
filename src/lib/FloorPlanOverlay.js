@@ -18,17 +18,17 @@ export function createFloorPlanOverlayClass() {
       this.mode = opts.mode || 'manual';
       this.distortedCorners = opts.distortedCorners || null;
       this.manager = opts.manager;
-      
+
       this.div = null;
       this.eventDiv = null;
       this.img = null;
-      
+
       this.onInteractStart = this.onInteractStart.bind(this);
       this.onInteractMove = this.onInteractMove.bind(this);
       this.onInteractEnd = this.onInteractEnd.bind(this);
-      
+
       this.interactState = null; // { type: 'drag'|'resize'|'rotate', startX, startY, origCenter, origWidth, origHeight, origRot, mapOptionsBackup }
-      
+
       if (opts.map) {
         this.setMap(opts.map);
       }
@@ -42,7 +42,7 @@ export function createFloorPlanOverlayClass() {
       this.div.style.zIndex = '1';
       this.div.style.pointerEvents = 'none'; // Visual only
       this.div.style.transformOrigin = 'center center';
-      
+
       this.img = document.createElement('img');
       this.img.src = this.url;
       this.img.style.width = '100%';
@@ -58,7 +58,7 @@ export function createFloorPlanOverlayClass() {
       this.eventDiv.style.cursor = this.isLocked ? 'default' : 'move';
       this.eventDiv.style.transformOrigin = 'center center';
       this.eventDiv.style.pointerEvents = this.isLocked ? 'none' : 'auto';
-      
+
       if (this.isLocked) {
         this.eventDiv.classList.add('fp-locked');
       }
@@ -87,7 +87,7 @@ export function createFloorPlanOverlayClass() {
 
       this.eventDiv.addEventListener('mousedown', this.onInteractStart);
       this.eventDiv.addEventListener('touchstart', this.onInteractStart, { passive: false });
-      
+
       const panes = this.getPanes();
       panes.overlayLayer.appendChild(this.div);
       panes.overlayMouseTarget.appendChild(this.eventDiv);
@@ -95,7 +95,7 @@ export function createFloorPlanOverlayClass() {
 
     draw() {
       if (!this.div) return;
-      
+
       if (this.mode === 'gcp') {
         this.div.style.display = 'none';
         this.eventDiv.style.display = 'none';
@@ -107,8 +107,13 @@ export function createFloorPlanOverlayClass() {
 
       const projection = this.getProjection();
       if (!projection) return;
-      
-      if (this.distortedCorners) {
+
+      // Fix: was branching purely on distortedCorners' presence, which is never
+      // cleared after leaving distort mode — so manual mode kept rendering the
+      // quad-warp UI forever once distort mode had been used once. Branch on
+      // the actual current mode instead; distortedCorners itself stays intact
+      // either way, so switching back into distort still shows the same edits.
+      if (this.mode === 'distort' && this.distortedCorners) {
         this.div.style.left = '0px';
         this.div.style.top = '0px';
         this.div.style.width = '0px';
@@ -124,10 +129,10 @@ export function createFloorPlanOverlayClass() {
 
         const w = 1000, h = 1000;
         const src = [
-          {x: 0, y: 0},
-          {x: w, y: 0},
-          {x: w, y: h},
-          {x: 0, y: h}
+          { x: 0, y: 0 },
+          { x: w, y: 0 },
+          { x: w, y: h },
+          { x: 0, y: h }
         ];
 
         const dc = this.distortedCorners;
@@ -135,12 +140,12 @@ export function createFloorPlanOverlayClass() {
         const pNE = projection.fromLatLngToDivPixel(new window.google.maps.LatLng(dc.ne.lat, dc.ne.lng));
         const pSE = projection.fromLatLngToDivPixel(new window.google.maps.LatLng(dc.se.lat, dc.se.lng));
         const pSW = projection.fromLatLngToDivPixel(new window.google.maps.LatLng(dc.sw.lat, dc.sw.lng));
-        
+
         const dst = [
-          {x: pNW.x, y: pNW.y},
-          {x: pNE.x, y: pNE.y},
-          {x: pSE.x, y: pSE.y},
-          {x: pSW.x, y: pSW.y}
+          { x: pNW.x, y: pNW.y },
+          { x: pNE.x, y: pNE.y },
+          { x: pSE.x, y: pSE.y },
+          { x: pSW.x, y: pSW.y }
         ];
 
         const handles = this.eventDiv.querySelectorAll('.fp-handle');
@@ -148,21 +153,21 @@ export function createFloorPlanOverlayClass() {
           const cls = handle.dataset.cls;
           const isDistortCorner = ['nw', 'ne', 'se', 'sw'].includes(cls);
           if ((this.mode === 'distort' && isDistortCorner) ||
-              (this.mode === 'manual' && (isDistortCorner || cls === 'center'))) {
+            (this.mode === 'manual' && (isDistortCorner || cls === 'center'))) {
             handle.style.display = 'block';
             if (cls === 'center') {
-               const cx = (dst[0].x + dst[1].x + dst[2].x + dst[3].x) / 4;
-               const cy = (dst[0].y + dst[1].y + dst[2].y + dst[3].y) / 4;
-               handle.style.left = (cx - 6) + 'px';
-               handle.style.top = (cy - 6) + 'px';
-               handle.style.right = '';
-               handle.style.bottom = '';
+              const cx = (dst[0].x + dst[1].x + dst[2].x + dst[3].x) / 4;
+              const cy = (dst[0].y + dst[1].y + dst[2].y + dst[3].y) / 4;
+              handle.style.left = (cx - 6) + 'px';
+              handle.style.top = (cy - 6) + 'px';
+              handle.style.right = '';
+              handle.style.bottom = '';
             } else {
-               const pt = dst[['nw', 'ne', 'se', 'sw'].indexOf(cls)];
-               handle.style.left = (pt.x - 6) + 'px';
-               handle.style.top = (pt.y - 6) + 'px';
-               handle.style.right = '';
-               handle.style.bottom = '';
+              const pt = dst[['nw', 'ne', 'se', 'sw'].indexOf(cls)];
+              handle.style.left = (pt.x - 6) + 'px';
+              handle.style.top = (pt.y - 6) + 'px';
+              handle.style.right = '';
+              handle.style.bottom = '';
             }
           } else {
             handle.style.display = 'none';
@@ -180,20 +185,20 @@ export function createFloorPlanOverlayClass() {
 
       } else {
         const centerPx = projection.fromLatLngToDivPixel(new window.google.maps.LatLng(this.center.lat, this.center.lng));
-        
+
         const R = 6378137;
         const cx = (this.center.lng * Math.PI * R) / 180;
         const cy = R * Math.log(Math.tan(Math.PI / 4 + (this.center.lat * Math.PI) / 360));
-        
+
         const eLng = ((cx + this.widthMeters / 2) * 180) / (Math.PI * R);
         const nLat = (180 / Math.PI) * (2 * Math.atan(Math.exp((cy + this.heightMeters / 2) / R)) - Math.PI / 2);
-        
+
         const eastPx = projection.fromLatLngToDivPixel(new window.google.maps.LatLng(this.center.lat, eLng));
         const northPx = projection.fromLatLngToDivPixel(new window.google.maps.LatLng(nLat, this.center.lng));
-        
+
         const widthPx = Math.abs(eastPx.x - centerPx.x) * 2;
         const heightPx = Math.abs(northPx.y - centerPx.y) * 2;
-        
+
         this.div.style.left = (centerPx.x - widthPx / 2) + 'px';
         this.div.style.top = (centerPx.y - heightPx / 2) + 'px';
         this.div.style.width = widthPx + 'px';
@@ -256,11 +261,11 @@ export function createFloorPlanOverlayClass() {
       }
       if (this.eventDiv) {
         this.eventDiv.style.cursor = this.isLocked ? 'default' : 'move';
-        
+
         // Disable pointer events if it's explicitly locked, OR if clickability is globally disabled (tool active)
         const effectivelyLocked = this.isLocked || (this.isClickable === false);
         this.eventDiv.style.pointerEvents = effectivelyLocked ? 'none' : 'auto';
-        
+
         if (this.isLocked) {
           this.eventDiv.classList.add('fp-locked');
         } else {
@@ -274,6 +279,49 @@ export function createFloorPlanOverlayClass() {
         if (opts.mode === 'distort' && this.mode !== 'distort') {
           if (!this.distortedCorners) {
             this.distortedCorners = this.manager.computeCorners(this);
+          }
+        } else if (opts.mode === 'manual' && this.mode === 'distort' && this.distortedCorners) {
+          // Fix: carry the distorted quad's footprint into manual mode as a
+          // best-fit rectangle (center/width/height/rotation), so manual mode
+          // continues seamlessly from where distort mode left off instead of
+          // snapping back to whatever rectangle existed before distort was
+          // first entered. distortedCorners itself is left untouched, so
+          // switching back into distort still shows the exact same quad —
+          // and nothing here touches storage/export, which read center/
+          // widthMeters/heightMeters/rotationDeg/distortedCorners directly.
+          const R = 6378137;
+          const toMerc = (lat, lng) => ({
+            x: (lng * Math.PI * R) / 180,
+            y: R * Math.log(Math.tan(Math.PI / 4 + (lat * Math.PI) / 360)),
+          });
+          const dc = this.distortedCorners;
+          const pNW = toMerc(dc.nw.lat, dc.nw.lng);
+          const pNE = toMerc(dc.ne.lat, dc.ne.lng);
+          const pSE = toMerc(dc.se.lat, dc.se.lng);
+          const pSW = toMerc(dc.sw.lat, dc.sw.lng);
+
+          const widthVecA = { x: pSE.x - pSW.x, y: pSE.y - pSW.y };
+          const widthVecB = { x: pNE.x - pNW.x, y: pNE.y - pNW.y };
+          const avgWidthVec = { x: (widthVecA.x + widthVecB.x) / 2, y: (widthVecA.y + widthVecB.y) / 2 };
+
+          const heightVecA = { x: pNW.x - pSW.x, y: pNW.y - pSW.y };
+          const heightVecB = { x: pNE.x - pSE.x, y: pNE.y - pSE.y };
+          const avgHeightVec = { x: (heightVecA.x + heightVecB.x) / 2, y: (heightVecA.y + heightVecB.y) / 2 };
+
+          const fitWidthMeters = Math.hypot(avgWidthVec.x, avgWidthVec.y);
+          const fitHeightMeters = Math.hypot(avgHeightVec.x, avgHeightVec.y);
+          const fitRotationDeg = -Math.atan2(avgWidthVec.y, avgWidthVec.x) * 180 / Math.PI;
+
+          const cxMerc = (pNW.x + pNE.x + pSE.x + pSW.x) / 4;
+          const cyMerc = (pNW.y + pNE.y + pSE.y + pSW.y) / 4;
+          const fitLng = (cxMerc * 180) / (Math.PI * R);
+          const fitLat = (180 / Math.PI) * (2 * Math.atan(Math.exp(cyMerc / R)) - Math.PI / 2);
+
+          if (fitWidthMeters > 0 && fitHeightMeters > 0) {
+            this.center = { lat: fitLat, lng: fitLng };
+            this.widthMeters = fitWidthMeters;
+            this.heightMeters = fitHeightMeters;
+            this.rotationDeg = fitRotationDeg;
           }
         }
         this.mode = opts.mode;
@@ -292,18 +340,18 @@ export function createFloorPlanOverlayClass() {
       }
       e.stopPropagation();
       e.preventDefault();
-      
+
       const target = e.target;
       const type = target.dataset.type || 'drag';
       const handleClass = target.dataset.cls;
-      
+
       const clientX = e.touches ? e.touches[0].clientX : e.clientX;
       const clientY = e.touches ? e.touches[0].clientY : e.clientY;
 
       const map = this.getMap();
       const proj = this.getProjection();
 
-      if (this.distortedCorners && ['nw', 'ne', 'se', 'sw'].includes(handleClass)) {
+      if (this.mode === 'distort' && this.distortedCorners && ['nw', 'ne', 'se', 'sw'].includes(handleClass)) {
         const cornerLatLng = this.distortedCorners[handleClass];
         const cornerPx = proj.fromLatLngToDivPixel(new window.google.maps.LatLng(cornerLatLng.lat, cornerLatLng.lng));
         this.interactState = {
@@ -323,11 +371,11 @@ export function createFloorPlanOverlayClass() {
         return;
       }
 
-      if (this.distortedCorners && handleClass === 'center') {
+      if (this.mode === 'distort' && this.distortedCorners && handleClass === 'center') {
         const cornersPx = {};
         for (const cls of ['nw', 'ne', 'se', 'sw']) {
-           const latlng = this.distortedCorners[cls];
-           cornersPx[cls] = proj.fromLatLngToDivPixel(new window.google.maps.LatLng(latlng.lat, latlng.lng));
+          const latlng = this.distortedCorners[cls];
+          cornersPx[cls] = proj.fromLatLngToDivPixel(new window.google.maps.LatLng(latlng.lat, latlng.lng));
         }
         this.interactState = {
           type: 'distort-drag',
@@ -394,28 +442,28 @@ export function createFloorPlanOverlayClass() {
       document.addEventListener('mouseup', this.onInteractEnd);
       document.addEventListener('touchmove', this.onInteractMove, { passive: false });
       document.addEventListener('touchend', this.onInteractEnd);
-      
+
       this.manager.onSelect(this.id);
     }
 
     onInteractMove(e) {
       if (!this.interactState) return;
       e.preventDefault();
-      
+
       const clientX = e.touches ? e.touches[0].clientX : e.clientX;
       const clientY = e.touches ? e.touches[0].clientY : e.clientY;
-      
+
       const dx = clientX - this.interactState.startX;
       const dy = clientY - this.interactState.startY;
-      
+
       const map = this.getMap();
       const zoom = map.getZoom();
       const metersPerPx = (156543.03392 * Math.cos(this.center.lat * Math.PI / 180)) / Math.pow(2, zoom);
-      
+
       if (this.interactState.type === 'distort') {
         const proj = this.getProjection();
         const newCornerPx = new window.google.maps.Point(
-          this.interactState.origCornerPx.x + dx, 
+          this.interactState.origCornerPx.x + dx,
           this.interactState.origCornerPx.y + dy
         );
         const newCornerLatLng = proj.fromDivPixelToLatLng(newCornerPx);
@@ -427,10 +475,10 @@ export function createFloorPlanOverlayClass() {
         const proj = this.getProjection();
         const newCorners = {};
         for (const cls of ['nw', 'ne', 'se', 'sw']) {
-           const origPx = this.interactState.origCornersPx[cls];
-           const newPx = new window.google.maps.Point(origPx.x + dx, origPx.y + dy);
-           const newLatLng = proj.fromDivPixelToLatLng(newPx);
-           newCorners[cls] = { lat: newLatLng.lat(), lng: newLatLng.lng() };
+          const origPx = this.interactState.origCornersPx[cls];
+          const newPx = new window.google.maps.Point(origPx.x + dx, origPx.y + dy);
+          const newLatLng = proj.fromDivPixelToLatLng(newPx);
+          newCorners[cls] = { lat: newLatLng.lat(), lng: newLatLng.lng() };
         }
         this.distortedCorners = newCorners;
       } else if (this.interactState.type === 'drag') {
@@ -441,59 +489,59 @@ export function createFloorPlanOverlayClass() {
       } else if (this.interactState.type === 'resize') {
         const proj = this.getProjection();
         const { dragSignX, dragSignY, oppLatLng, origRot, origWidthPx, origHeightPx, origCenterPx, origCenter } = this.interactState;
-        
+
         const oppScreen = proj.fromLatLngToDivPixel(new window.google.maps.LatLng(oppLatLng.lat, oppLatLng.lng));
-        
+
         const dragLocalX = dragSignX * (origWidthPx / 2);
         const dragLocalY = dragSignY * (origHeightPx / 2);
-        
+
         const rotatePt = (x, y, deg) => {
           const rad = deg * Math.PI / 180;
           return { x: x * Math.cos(rad) - y * Math.sin(rad), y: x * Math.sin(rad) + y * Math.cos(rad) };
         };
-        
+
         // Find original dragged corner screen coordinate relative to original center
         const dragScreenRel = rotatePt(dragLocalX, dragLocalY, origRot);
-        
+
         // Recalculate origCenterPx just in case map projection changed slightly, though we try to keep it stable
         const currentOrigCenterPx = proj.fromLatLngToDivPixel(new window.google.maps.LatLng(origCenter.lat, origCenter.lng));
         const origDragScreen = {
           x: currentOrigCenterPx.x + dragScreenRel.x,
           y: currentOrigCenterPx.y + dragScreenRel.y
         };
-        
+
         // New screen coordinate of dragged corner based on mouse delta
         const newDragScreen = {
           x: origDragScreen.x + dx,
           y: origDragScreen.y + dy
         };
-        
+
         // Vector from opposite point to new dragged point in screen space
         const newDiagScreen = {
           x: newDragScreen.x - oppScreen.x,
           y: newDragScreen.y - oppScreen.y
         };
-        
+
         // Unrotate into local space
         const newDiagLocal = rotatePt(newDiagScreen.x, newDiagScreen.y, -origRot);
-        
+
         let newWidthPx = origWidthPx;
         let newHeightPx = origHeightPx;
-        
+
         if (dragSignX !== 0) {
-          newWidthPx = dragSignX * newDiagLocal.x; 
+          newWidthPx = dragSignX * newDiagLocal.x;
         }
         if (dragSignY !== 0) {
           newHeightPx = dragSignY * newDiagLocal.y;
         }
-        
+
         newWidthPx = Math.max(10, newWidthPx);
         newHeightPx = Math.max(10, newHeightPx);
-        
+
         if (this.isAspectLocked) {
           const scaleX = newWidthPx / origWidthPx;
           const scaleY = newHeightPx / origHeightPx;
-          
+
           let scale = 1;
           if (dragSignX !== 0 && dragSignY !== 0) {
             scale = Math.max(scaleX, scaleY);
@@ -502,24 +550,24 @@ export function createFloorPlanOverlayClass() {
           } else if (dragSignY !== 0) {
             scale = scaleY;
           }
-          
+
           newWidthPx = origWidthPx * scale;
           newHeightPx = origHeightPx * scale;
         }
-        
+
         // Center in local space relative to the opposite point anchor
         const centerLocalRelOpp = {
           x: dragSignX * (newWidthPx / 2),
           y: dragSignY * (newHeightPx / 2)
         };
-        
+
         const centerScreenRelOpp = rotatePt(centerLocalRelOpp.x, centerLocalRelOpp.y, origRot);
-        
+
         const newCenterPx = new window.google.maps.Point(
           oppScreen.x + centerScreenRelOpp.x,
           oppScreen.y + centerScreenRelOpp.y
         );
-        
+
         const newCenterLatLng = proj.fromDivPixelToLatLng(newCenterPx);
         this.center = { lat: newCenterLatLng.lat(), lng: newCenterLatLng.lng() };
         this.widthMeters = newWidthPx * this.interactState.metersPerPx;
@@ -534,7 +582,7 @@ export function createFloorPlanOverlayClass() {
         const deg = (angle * 180 / Math.PI) + 90;
         this.rotationDeg = deg;
       }
-      
+
       this.draw();
       this.manager.onChange(this.id);
     }
@@ -545,11 +593,11 @@ export function createFloorPlanOverlayClass() {
       document.removeEventListener('mouseup', this.onInteractEnd);
       document.removeEventListener('touchmove', this.onInteractMove);
       document.removeEventListener('touchend', this.onInteractEnd);
-      
+
       const map = this.getMap();
       // Restore map options
       map.setOptions({ draggable: true, gestureHandling: "greedy", scrollwheel: true, disableDoubleClickZoom: false });
-      
+
       const finalState = {
         center: this.center,
         widthMeters: this.widthMeters,
@@ -557,7 +605,7 @@ export function createFloorPlanOverlayClass() {
         rotationDeg: this.rotationDeg,
         distortedCorners: this.distortedCorners ? { ...this.distortedCorners } : null
       };
-      
+
       this.manager.commitChange(this.id, this.interactState, finalState);
       this.interactState = null;
     }
