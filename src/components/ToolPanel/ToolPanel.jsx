@@ -142,20 +142,28 @@ const blobUrlToBytes = async (url) => {
 const generateKMLString = (data, exportMode = 'kml') => {
   let kml = `<?xml version="1.0" encoding="UTF-8"?>\n<kml xmlns="http://www.opengis.net/kml/2.2" xmlns:gx="http://www.google.com/kml/ext/2.2">\n  <Document>\n    <name>${data.id || 'Exported Project'}</name>\n`;
 
+  const plotSortValue = (key) => {
+    if (key === null || key === undefined) return Number.POSITIVE_INFINITY;
+    const match = String(key).match(/-?\d+/);
+    return match ? parseInt(match[0], 10) : Number.POSITIVE_INFINITY;
+  };
+
   const fpBuckets = {};
   if (data.floorPlans) {
     data.floorPlans.forEach((fp, i) => {
-      fpBuckets[fp.id] = { fp, index: i, items: [] };
+      fpBuckets[fp.id] = { fp, index: i, items: [], plotItems: [] };
     });
   }
   const globalItems = [];
+  const globalPlotItems = [];
 
-  const addStr = (metadata, str) => {
+  const addStr = (metadata, str, isPlot = false, sortKey = null) => {
     const fpId = metadata?.floorPlanId;
-    if (fpId && fpBuckets[fpId]) {
-      fpBuckets[fpId].items.push(str);
+    const bucket = fpId && fpBuckets[fpId] ? fpBuckets[fpId] : null;
+    if (isPlot) {
+      (bucket ? bucket.plotItems : globalPlotItems).push({ str, sortKey });
     } else {
-      globalItems.push(str);
+      (bucket ? bucket.items : globalItems).push(str);
     }
   };
 
@@ -214,7 +222,7 @@ const generateKMLString = (data, exportMode = 'kml') => {
         </outerBoundaryIs>
       </Polygon>
     </Placemark>`;
-      addStr(poly.metadata, str);
+      addStr(poly.metadata, str, poly.category === 'unit' || poly.category === 'pending-unit', poly.name || `Polygon ${i + 1}`);
     });
   }
 
@@ -321,9 +329,16 @@ const generateKMLString = (data, exportMode = 'kml') => {
     data.floorPlans.forEach((fp) => {
       const bucket = fpBuckets[fp.id];
       if (!bucket) return;
-      const { index, items } = bucket;
+      const { index, items, plotItems } = bucket;
       if (!fp.bounds || !fp.corners) return;
       const name = fp.name || `Floor Plan ${index + 1}`;
+
+      const sortedPlotItems = [...plotItems].sort((a, b) => plotSortValue(a.sortKey) - plotSortValue(b.sortKey));
+      const plotsFolderStr = sortedPlotItems.length > 0 ? `
+    <Folder>
+      <name>Plots</name>
+${sortedPlotItems.map(p => p.str).join('')}
+    </Folder>` : '';
       let href = fp.floorplan;
       if (exportMode === 'kmz') href = `files/floorplan-${fp.id}.png`;
       else if (exportMode === 'zip') href = `floorplan-${fp.id}.png`;
@@ -336,7 +351,7 @@ const generateKMLString = (data, exportMode = 'kml') => {
       <GroundOverlay>
         <name>${name}</name>
         <gx:drawOrder>0</gx:drawOrder>
-        <gx:altitudeMode>clampToSeaFloor</gx:altitudeMode>
+        <gx:altitudeMode>clampToGround</gx:altitudeMode>
         <Icon>
           <href>${href}</href>
         </Icon>
@@ -397,16 +412,23 @@ const generateKMLString = (data, exportMode = 'kml') => {
       kml += `
     <Folder>
       <name>${name}</name>${goStr}
-${items.join('')}
+${items.join('')}${plotsFolderStr}
     </Folder>`;
     });
   }
 
-  if (globalItems.length > 0) {
+  if (globalItems.length > 0 || globalPlotItems.length > 0) {
+    const sortedGlobalPlotItems = [...globalPlotItems].sort((a, b) => plotSortValue(a.sortKey) - plotSortValue(b.sortKey));
+    const globalPlotsFolderStr = sortedGlobalPlotItems.length > 0 ? `
+    <Folder>
+      <name>Plots</name>
+${sortedGlobalPlotItems.map(p => p.str).join('')}
+    </Folder>` : '';
+
     kml += `
     <Folder>
       <name>Global Layer</name>
-${globalItems.join('')}
+${globalItems.join('')}${globalPlotsFolderStr}
     </Folder>`;
   }
 
@@ -567,6 +589,7 @@ function SaveBundleDialog({ onClose, onSave, defaultName }) {
 
 export default function ToolPanel() {
   const {
+    activeTool,
     activeProjectTool, setActiveProjectTool,
     activeLandmarkTool, setActiveLandmarkTool,
     closeSidePopups,
@@ -574,11 +597,24 @@ export default function ToolPanel() {
     floorPlanManagerRef,
     polygonManagerRef,
     pinManagerRef,
-    activeLayerId
+    activeLayerId,
+    isDrawingInProgressRef
   } = useWorkspace();
   const [exportMenuOpen, setExportMenuOpen] = useState(false);
   const [saveBundleDialogOpen, setSaveBundleDialogOpen] = useState(false);
   const [defaultZipName, setDefaultZipName] = useState('project');
+  const [blockedMessage, setBlockedMessage] = useState(null);
+  const blockedTimerRef = React.useRef(null);
+
+  // Shown when the user tries to switch tools mid-draw. Polygon/road drawing
+  // state lives in MapWorkspace's map listeners, not here — isDrawingInProgressRef
+  // is the shared flag that lets this component know a draw is in progress.
+  const triggerBlockedMessage = () => {
+    const isRoad = (activeTool || '').includes('road');
+    setBlockedMessage(isRoad ? 'Complete or press Esc to cancel the road' : 'Complete or press Esc to cancel the polygon');
+    if (blockedTimerRef.current) clearTimeout(blockedTimerRef.current);
+    blockedTimerRef.current = setTimeout(() => setBlockedMessage(null), 2200);
+  };
 
   const getJSONString = (data) => JSON.stringify(data, null, 2);
 
@@ -1185,8 +1221,15 @@ export default function ToolPanel() {
   };
 
 
-  // Any tool tap closes the polygon popup / side panel before switching tools
+  // Any tool tap closes the polygon popup / side panel before switching tools.
+  // Blocked entirely if a polygon/road draw is mid-progress and the tap targets
+  // a different tool — same tool tap still passes through (it toggles off,
+  // which correctly cancels the in-progress draw).
   const handleProjectTool = (id) => {
+    if (isDrawingInProgressRef.current && id !== activeTool) {
+      triggerBlockedMessage();
+      return;
+    }
     closeSidePopups();
     if (id === 'proj-floor-plan') {
       document.getElementById('fp-upload-input')?.click();
@@ -1195,6 +1238,10 @@ export default function ToolPanel() {
     setActiveProjectTool((prev) => (prev === id ? null : id));
   };
   const handleLandmarkTool = (id) => {
+    if (isDrawingInProgressRef.current && id !== activeTool) {
+      triggerBlockedMessage();
+      return;
+    }
     closeSidePopups();
     setActiveLandmarkTool((prev) => (prev === id ? null : id));
   };
@@ -1204,7 +1251,29 @@ export default function ToolPanel() {
   return (
     <div className="tp-panel" id="tp-panel">
 
-
+      {blockedMessage && (
+        <div
+          style={{
+            position: 'fixed',
+            top: '54px',
+            left: '360px',
+            background: '#1A202C',
+            color: '#E2E8F0',
+            border: '1px solid #2D3748',
+            borderRadius: '6px',
+            padding: '6px 12px',
+            fontSize: '12px',
+            fontWeight: 500,
+            whiteSpace: 'nowrap',
+            boxShadow: '0 4px 12px rgba(0,0,0,0.3)',
+            fontFamily: "'Inter', system-ui, -apple-system, sans-serif",
+            zIndex: 1000000,
+            pointerEvents: 'none',
+          }}
+        >
+          {blockedMessage}
+        </div>
+      )}
 
       {/* Drawing tools — left side */}
       <div className="tp-group" role="group" aria-label="Project tools">

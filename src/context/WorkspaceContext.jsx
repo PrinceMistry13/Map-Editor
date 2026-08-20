@@ -67,15 +67,29 @@ export function WorkspaceProvider({ children }) {
   const polygonManagerRef = useRef(null);
   const pinManagerRef = useRef(null);
   const floorPlanManagerRef = useRef(null);
+  // Shared between MapWorkspace (where drawing actually happens) and ToolPanel
+  // (where tool buttons live) — true while a polygon/road is mid-draw, so
+  // ToolPanel can block switching to a different tool until it's finished.
+  const isDrawingInProgressRef = useRef(false);
 
   const setActiveProjectTool = useCallback((idOrFn) => {
-    _setActiveProjectTool(idOrFn);
+    _setActiveProjectTool((prev) => {
+      const next = typeof idOrFn === 'function' ? idOrFn(prev) : idOrFn;
+      // Only one tool can ever be active app-wide — selecting a real tool here
+      // must clear the other group's selection so its button stops showing active.
+      if (next !== null) _setActiveLandmarkTool(null);
+      return next;
+    });
     setLastGroup('project');
     setSelectedId(null);
   }, []);
 
   const setActiveLandmarkTool = useCallback((idOrFn) => {
-    _setActiveLandmarkTool(idOrFn);
+    _setActiveLandmarkTool((prev) => {
+      const next = typeof idOrFn === 'function' ? idOrFn(prev) : idOrFn;
+      if (next !== null) _setActiveProjectTool(null);
+      return next;
+    });
     setLastGroup('landmark');
     setSelectedId(null);
   }, []);
@@ -184,7 +198,7 @@ export function WorkspaceProvider({ children }) {
   // project — save, export, project switch — must read through this.
   const getExportProject = useCallback(() => {
     const polyState = polygonManagerRef.current?.getState() || { polygons: [], roads: [] };
-    
+
     return {
       ...project,
       ...polyState,
@@ -318,6 +332,7 @@ export function WorkspaceProvider({ children }) {
         polygonManagerRef,
         pinManagerRef,
         floorPlanManagerRef,
+        isDrawingInProgressRef,
         snapToGrid,
         setSnapToGrid,
         activeLayerId,

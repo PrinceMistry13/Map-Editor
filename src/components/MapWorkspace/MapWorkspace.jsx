@@ -295,6 +295,7 @@ function MapWorkspaceInner() {
     polygonManagerRef,
     pinManagerRef,
     floorPlanManagerRef,
+    isDrawingInProgressRef,
     activeLayerId, setActiveLayerId,
     isAutoPlotReviewMode,
     confirmAutoPlotUnits,
@@ -716,7 +717,7 @@ function MapWorkspaceInner() {
     const p = toolPropsRef.current.road;
     const newId = nextId('road');
     const layerId = activeLayerIdRef.current || 'layer-1';
-    
+
     if (polygonManagerRef.current) {
       polygonManagerRef.current.createPolygon(
         newId,
@@ -731,7 +732,7 @@ function MapWorkspaceInner() {
       polygonManagerRef.current.callbacks.onChange();
       polygonManagerRef.current.select(newId);
     }
-    
+
     setPendingRoad(null);
   }, [pendingRoad, pendingRoadName, pendingRoadCategory]);
 
@@ -1047,6 +1048,13 @@ function MapWorkspaceInner() {
 
       map.setOptions({ draggableCursor: 'crosshair' });
 
+      // Tracks the most recent cursor position from mousemove. Used to seed
+      // the rubberband immediately after a click, instead of leaving it
+      // collapsed to a single (invisible) point until the next mousemove
+      // fires — fast clicking can skip/coalesce mousemove events entirely
+      // between two clicks, which was making the rubberband disappear.
+      let lastMousePos = null;
+
       // Helper: pixel distance between two LatLng on screen
       const screenDist = (a, b) => {
         const proj = map.getProjection();
@@ -1069,6 +1077,7 @@ function MapWorkspaceInner() {
 
       const addPoint = (latLng) => {
         drawPath.push(latLng);
+        isDrawingInProgressRef.current = true;
         placedLine.setPath(drawPath);
 
         const isFirst = drawMarkers.length === 0;
@@ -1081,8 +1090,9 @@ function MapWorkspaceInner() {
         });
         drawMarkers.push(marker);
 
-        // Update preview to start from the new last point
-        previewLine.setPath(drawPath.length >= 1 ? [latLng] : []);
+        // Seed the preview from the last known cursor position immediately —
+        // don't wait for the next mousemove, which may not come right away.
+        previewLine.setPath(drawPath.length >= 1 ? [latLng, lastMousePos || latLng] : []);
       };
 
       const finish = () => {
@@ -1097,10 +1107,12 @@ function MapWorkspaceInner() {
         drawPath = [];
         drawMarkers = [];
         snapMode = false;
+        isDrawingInProgressRef.current = false;
       };
 
       // Live rubber-band: update preview segment as mouse moves
       ls.push(map.addListener('mousemove', (e) => {
+        lastMousePos = e.latLng;
         if (drawPath.length === 0) return;
         const cursor = e.latLng;
         previewLine.setPath([drawPath[drawPath.length - 1], cursor]);
@@ -1142,6 +1154,7 @@ function MapWorkspaceInner() {
         drawPath = [];
         drawMarkers = [];
         snapMode = false;
+        isDrawingInProgressRef.current = false;
       };
     }
 
@@ -1229,9 +1242,16 @@ function MapWorkspaceInner() {
 
       map.setOptions({ draggableCursor: 'crosshair' });
 
+      // Tracks the most recent cursor position so the rubberband can be
+      // seeded immediately after a click, instead of sitting collapsed to a
+      // single (invisible) point until the next mousemove fires — fast
+      // clicking can skip mousemove events entirely between two clicks.
+      let lastMousePos = null;
+
       const addPoint = (latLng) => {
         const pt = { lat: latLng.lat(), lng: latLng.lng() };
         drawPath.push(pt);
+        isDrawingInProgressRef.current = true;
         placedLine.setPath(drawPath);
         const marker = new window.google.maps.Marker({
           position: latLng, map, clickable: false, zIndex: 51,
@@ -1242,8 +1262,8 @@ function MapWorkspaceInner() {
           },
         });
         drawMarkers.push(marker);
-        // Preview starts from new last point
-        previewLine.setPath(drawPath.length >= 1 ? [pt] : []);
+        // Seed the preview from the last known cursor position immediately.
+        previewLine.setPath(drawPath.length >= 1 ? [pt, lastMousePos || pt] : []);
       };
 
       const finish = () => {
@@ -1256,6 +1276,7 @@ function MapWorkspaceInner() {
         }
         drawPath = [];
         drawMarkers = [];
+        isDrawingInProgressRef.current = false;
       };
 
       // Register finish fn for Enter key
@@ -1263,8 +1284,9 @@ function MapWorkspaceInner() {
 
       // Live rubber-band: update preview as mouse moves
       ls.push(map.addListener('mousemove', (e) => {
+        lastMousePos = { lat: e.latLng.lat(), lng: e.latLng.lng() };
         if (drawPath.length === 0) return;
-        previewLine.setPath([drawPath[drawPath.length - 1], { lat: e.latLng.lat(), lng: e.latLng.lng() }]);
+        previewLine.setPath([drawPath[drawPath.length - 1], lastMousePos]);
       }));
 
       // Click: add a point
@@ -1286,6 +1308,7 @@ function MapWorkspaceInner() {
         drawPath = [];
         drawMarkers = [];
         finishRoadRef.current = null;
+        isDrawingInProgressRef.current = false;
       };
     }
 
