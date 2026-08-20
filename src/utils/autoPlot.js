@@ -33,7 +33,7 @@ export async function detectUnitsFromImage(floorPlanManager, floorPlanId) {
         // approxPolyDP's epsilon is often too small to flatten these into one straight
         // segment, so the steps survive as many near-collinear vertices — this drops
         // any vertex whose turn angle is below threshold, keeping only real corners.
-        function simplifyCollinear(pixels, angleThresholdDeg = 6) {
+        function simplifyCollinear(pixels, angleThresholdDeg = 6, maxNoiseSegLen = 10) {
             if (pixels.length <= 3) return pixels;
             const n = pixels.length;
             const result = [];
@@ -44,10 +44,16 @@ export async function detectUnitsFromImage(floorPlanManager, floorPlanId) {
                 const v1x = curr.x - prev.x, v1y = curr.y - prev.y;
                 const v2x = next.x - curr.x, v2y = next.y - curr.y;
                 const len1 = Math.hypot(v1x, v1y), len2 = Math.hypot(v2x, v2y);
-                if (len1 === 0 || len2 === 0) continue; // drop duplicate points
+                if (len1 === 0 || len2 === 0) continue;
                 const dot = (v1x * v2x + v1y * v2y) / (len1 * len2);
                 const angleDeg = Math.acos(Math.max(-1, Math.min(1, dot))) * 180 / Math.PI;
-                if (angleDeg > angleThresholdDeg) result.push(curr); // real corner — keep
+                // Fix: a gentle-curve vertex has the same small turn angle as
+                // genuine Canny pixel-staircase noise, but its adjacent segments
+                // are much longer (real shape data vs. 1-3px steps) — only drop
+                // the vertex when BOTH the angle is small AND both neighboring
+                // segments are short, so real curve detail survives.
+                const isShortNoise = len1 < maxNoiseSegLen && len2 < maxNoiseSegLen;
+                if (angleDeg > angleThresholdDeg || !isShortNoise) result.push(curr);
             }
             return result.length >= 3 ? result : pixels;
         }
@@ -86,7 +92,6 @@ export async function detectUnitsFromImage(floorPlanManager, floorPlanId) {
 
         for (const params of parameterSets) {
             let edges = new cv.Mat();
-            matsToDelete.push(edges);
             cv.Canny(gray, edges, params.canny[0], params.canny[1], 3, false);
 
             if (params.dilate > 0) {
@@ -96,7 +101,6 @@ export async function detectUnitsFromImage(floorPlanManager, floorPlanId) {
 
             let contours = new cv.MatVector();
             let hierarchy = new cv.Mat();
-            matsToDelete.push(contours, hierarchy);
             cv.findContours(edges, contours, hierarchy, cv.RETR_LIST, cv.CHAIN_APPROX_SIMPLE);
 
             for (let i = 0; i < contours.size(); ++i) {
@@ -126,12 +130,30 @@ export async function detectUnitsFromImage(floorPlanManager, floorPlanId) {
 
                             const approx = new cv.Mat();
                             try {
-                                // Relaxed relative epsilon (0.8% of hull arc length) smooths text-bump jaggedness
-                                const epsilon = 0.008 * cv.arcLength(hull, true);
-                                cv.approxPolyDP(hull, approx, epsilon, true);
+                                // First pass: the original coarse epsilon (percentage of
+                                // full perimeter). A genuinely straight/rectangular plot
+                                // reduces to very few vertices at this epsilon — that's
+                                // the same clean, low-noise path this always used.
+                                const coarseEpsilon = 0.008 * cv.arcLength(hull, true);
+                                cv.approxPolyDP(hull, approx, coarseEpsilon, true);
 
-                                // Allow up to 12 vertices to prevent rejecting slightly noisy plots
-                                if (approx.rows >= 4 && approx.rows <= 12) {
+                                // Fix: only treat this as a CURVED boundary — and switch to
+                                // the finer, absolute-pixel-capped epsilon that preserves
+                                // curve detail — when the coarse pass already needed more
+                                // vertices than a simple quad/rectangle would. Applying the
+                                // fine epsilon unconditionally was picking up Canny pixel
+                                // noise as fake extra vertices on genuinely straight edges,
+                                // making them look jagged instead of clean.
+                                const COARSE_VERTEX_THRESHOLD = 6;
+                                if (approx.rows > COARSE_VERTEX_THRESHOLD) {
+                                    const fineEpsilon = Math.min(2.0, coarseEpsilon);
+                                    cv.approxPolyDP(hull, approx, fineEpsilon, true);
+                                }
+
+                                // Fix: 12 was too low for genuinely curved boundary
+                                // plots — a smooth curve needs many vertices to look
+                                // like a curve rather than a few straight facets.
+                                if (approx.rows >= 4 && approx.rows <= 40) {
                                     const M_moments = cv.moments(hull);
                                     const cx = M_moments.m10 / M_moments.m00;
                                     const cy = M_moments.m01 / M_moments.m00;
@@ -159,6 +181,15 @@ export async function detectUnitsFromImage(floorPlanManager, floorPlanId) {
                     contour.delete();
                 }
             }
+
+            // Fix: free this pass's edges/contours/hierarchy immediately instead
+            // of holding all 3 parameter-set passes' buffers alive simultaneously
+            // until the whole function returns — that was roughly tripling peak
+            // WASM heap usage, which is what triggers "Insufficient memory" on
+            // larger images.
+            edges.delete();
+            contours.delete();
+            hierarchy.delete();
         }
 
         if (candidateContours.length === 0) return [];
@@ -368,24 +399,45 @@ export async function detectUnitsFromImage(floorPlanManager, floorPlanId) {
                     : OUTWARD_OFFSET_PX_VERTICAL;
                 const offP1 = { x: p1.x + nx * offsetPx, y: p1.y + ny * offsetPx };
                 const offP2 = { x: p2.x + nx * offsetPx, y: p2.y + ny * offsetPx };
-                offsetLines.push({ p1: offP1, p2: offP2 });
+                offsetLines.push({ p1: offP1, p2: offP2, offsetPx });
             }
 
-            // Recompute corners as line-line intersections of consecutive offset edges
             function lineIntersect(a1, a2, b1, b2) {
                 const d1x = a2.x - a1.x, d1y = a2.y - a1.y;
                 const d2x = b2.x - b1.x, d2y = b2.y - b1.y;
                 const denom = d1x * d2y - d1y * d2x;
-                if (Math.abs(denom) < 1e-9) return a2; // parallel — fallback
+                if (Math.abs(denom) < 1e-9) return a2;
                 const t = ((b1.x - a1.x) * d2y - (b1.y - a1.y) * d2x) / denom;
                 return { x: a1.x + t * d1x, y: a1.y + t * d1y };
             }
+
+            // Fix: a run of near-collinear vertices (a smoothly curved boundary,
+            // or a very obtuse original angle) makes two adjacent offset edges
+            // nearly parallel — their raw miter-join intersection then lands far
+            // outside the actual shape. This was the root cause of corners
+            // landing outside the image, odd wedge-shaped gaps at curves, and
+            // curved edges rendering as jagged straight facets (a few exploded
+            // corners drag the whole segment out of shape). Fall back to a
+            // bevel join (midpoint of the two offset edge endpoints) whenever
+            // the miter point strays too far from where the vertex actually was.
+            const MITER_LIMIT = 4; // corners further than this many offset-widths from the original vertex get beveled
 
             const newPixels = [];
             for (let i = 0; i < n; i++) {
                 const prevLine = offsetLines[(i - 1 + n) % n];
                 const currLine = offsetLines[i];
-                newPixels.push(lineIntersect(prevLine.p1, prevLine.p2, currLine.p1, currLine.p2));
+                const rawCorner = lineIntersect(prevLine.p1, prevLine.p2, currLine.p1, currLine.p2);
+
+                const refOffset = Math.max(prevLine.offsetPx || 0, currLine.offsetPx || 0);
+                const distFromOrig = Math.hypot(rawCorner.x - pixels[i].x, rawCorner.y - pixels[i].y);
+                if (refOffset > 0 && distFromOrig > MITER_LIMIT * refOffset) {
+                    newPixels.push({
+                        x: (prevLine.p2.x + currLine.p1.x) / 2,
+                        y: (prevLine.p2.y + currLine.p1.y) / 2,
+                    });
+                } else {
+                    newPixels.push(rawCorner);
+                }
             }
             return newPixels;
         }
@@ -434,7 +486,17 @@ export async function detectUnitsFromImage(floorPlanManager, floorPlanId) {
         // Step 3: project snapped pixels
         let detectedPaths = [];
         for (const { c, pixels } of offsetResults) {
-            let latLngs = floorPlanManager.projectPixelsToLatLngs(floorPlanId, pixels, W, H);
+            // Fix: unconditional safety net — whatever caused a vertex to drift
+            // past the edge (offsetting an outer/coastal boundary that has no
+            // matching neighbor to center against, or any other overshoot),
+            // a plot can never legitimately extend beyond the actual
+            // photographed image. Clamp every vertex to [0,W] x [0,H] before
+            // projecting, so no boundary can end up outside the image itself.
+            const clampedPixels = pixels.map(p => ({
+                x: Math.max(0, Math.min(W, p.x)),
+                y: Math.max(0, Math.min(H, p.y)),
+            }));
+            let latLngs = floorPlanManager.projectPixelsToLatLngs(floorPlanId, clampedPixels, W, H);
             if (latLngs && latLngs.length > 0) {
                 detectedPaths.push({ path: latLngs, id: c.id, sqyd: c.sqyd, length: c.length, width: c.width });
             }
