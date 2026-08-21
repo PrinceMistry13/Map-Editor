@@ -11,9 +11,9 @@ import { useState, useCallback } from 'react';
  */
 export function useHistory(initialState) {
   const [history, setHistory] = useState({
-    past   : [], // array of { type: 'state', state } OR { type: 'thunk', undo, redo }
+    past: [], // array of { type: 'state', state } OR { type: 'thunk', undo, redo }
     present: initialState,
-    future : [],
+    future: [],
   });
 
   const commit = useCallback((newPresentOrUpdater) => {
@@ -30,6 +30,20 @@ export function useHistory(initialState) {
     });
   }, []);
 
+  // Mutates `present` directly WITHOUT pushing a history entry and WITHOUT
+  // clearing `future`. For use inside a thunk's own undo/redo (see
+  // pushThunk below) when part of that thunk's effect is a plain state
+  // change (e.g. removing a layer) that should be restored/reapplied by the
+  // SAME undo/redo step, not recorded as a second, separate history step.
+  const setPresentSilently = useCallback((newPresentOrUpdater) => {
+    setHistory((h) => ({
+      ...h,
+      present: typeof newPresentOrUpdater === 'function'
+        ? newPresentOrUpdater(h.present)
+        : newPresentOrUpdater,
+    }));
+  }, []);
+
   const pushThunk = useCallback((thunk) => {
     setHistory((h) => {
       return {
@@ -40,59 +54,66 @@ export function useHistory(initialState) {
     });
   }, []);
 
+  // undo/redo call a thunk's real side effect (e.g. recreating a deleted
+  // polygon's Google Maps overlay). That side effect must run EXACTLY once.
+  // It is deliberately NOT called from inside the setHistory updater below:
+  // React (in StrictMode/dev) invokes state-updater functions twice to
+  // detect impure updaters, and a real side effect placed there would fire
+  // twice — creating two overlays for the same id, where only the second is
+  // ever tracked by the manager. The first becomes an orphaned "ghost" that
+  // stays on the map forever, since a later delete only finds the tracked
+  // one. Reading `history` directly here (a plain, single, synchronous
+  // call) avoids that entirely.
   const undo = useCallback(() => {
-    setHistory((h) => {
-      if (h.past.length === 0) return h;
-      const past = [...h.past];
-      const last = past.pop();
+    if (history.past.length === 0) return;
+    const past = [...history.past];
+    const last = past.pop();
 
-      if (last.type === 'state') {
-        return {
-          past,
-          present: last.state,
-          future: [{ type: 'state', state: h.present }, ...h.future],
-        };
-      } else {
-        last.undo();
-        return {
-          past,
-          present: h.present,
-          future: [last, ...h.future],
-        };
-      }
-    });
-  }, []);
+    if (last.type === 'state') {
+      setHistory({
+        past,
+        present: last.state,
+        future: [{ type: 'state', state: history.present }, ...history.future],
+      });
+    } else {
+      last.undo();
+      setHistory({
+        past,
+        present: history.present,
+        future: [last, ...history.future],
+      });
+    }
+  }, [history]);
 
   const redo = useCallback(() => {
-    setHistory((h) => {
-      if (h.future.length === 0) return h;
-      const future = [...h.future];
-      const first = future.shift();
+    if (history.future.length === 0) return;
+    const future = [...history.future];
+    const first = future.shift();
 
-      if (first.type === 'state') {
-        return {
-          past: [...h.past, { type: 'state', state: h.present }],
-          present: first.state,
-          future,
-        };
-      } else {
-        first.redo();
-        return {
-          past: [...h.past, first],
-          present: h.present,
-          future,
-        };
-      }
-    });
-  }, []);
+    if (first.type === 'state') {
+      setHistory({
+        past: [...history.past, { type: 'state', state: history.present }],
+        present: first.state,
+        future,
+      });
+    } else {
+      first.redo();
+      setHistory({
+        past: [...history.past, first],
+        present: history.present,
+        future,
+      });
+    }
+  }, [history]);
 
   return {
-    state  : history.present,
+    state: history.present,
     commit,
+    setPresentSilently,
     pushThunk,
     undo,
     redo,
-    canUndo: history.past.length   > 0,
+    canUndo: history.past.length > 0,
     canRedo: history.future.length > 0,
   };
 }

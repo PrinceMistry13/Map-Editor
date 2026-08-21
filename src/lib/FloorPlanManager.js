@@ -444,11 +444,11 @@ export default class FloorPlanManager {
     this.callbacks.onChange && this.callbacks.onChange(id);
   }
 
-  delete(id) {
+  delete(id, skipHistory) {
     const entry = this.overlays.get(id);
     if (!entry) return;
 
-    if (this.callbacks.pushHistory) {
+    if (!skipHistory && this.callbacks.pushHistory) {
       this.callbacks.pushHistory({
         undo: () => {
           entry.overlay.setMap(this.map);

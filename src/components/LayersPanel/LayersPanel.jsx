@@ -100,6 +100,7 @@ export default function LayersPanel({ tick = 0 }) {
     addLayer, deleteLayer, updateLayer, updateFolderSetting, toggleLayerVisibility, reorderLayers,
     polygonManagerRef, pinManagerRef, floorPlanManagerRef,
     getExportProject,
+    pushThunk, mutateLayersSilently,
     selectedLayerItemId, setSelectedLayerItemId,
     openFloorPlanFolderId, setOpenFloorPlanFolderId,
     selectedRoadEntry, setSelectedRoadEntry, setRoadPopupPos,
@@ -109,6 +110,16 @@ export default function LayersPanel({ tick = 0 }) {
   const [menuOpenId, setMenuOpenId] = useState(null);
   const [editingLayerId, setEditingLayerId] = useState(null);
   const [tempLayerName, setTempLayerName] = useState("");
+
+  // In-app confirmation dialog. Replaces window.confirm(), which can be
+  // silently blocked/auto-dismissed inside sandboxed webviews (making a
+  // delete button look like it "does nothing"). { message, onConfirm } |
+  // null.
+  const [confirmDialog, setConfirmDialog] = useState(null);
+  const requestConfirm = (message, onConfirm) => {
+    setMenuOpenId(null);
+    setConfirmDialog({ message, onConfirm });
+  };
 
   const replaceFileRef = useRef(null);
   const [replacingFloorPlanId, setReplacingFloorPlanId] = useState(null);
@@ -179,28 +190,175 @@ export default function LayersPanel({ tick = 0 }) {
     setSelectedLayerItemId(id);
   };
 
+  // ── Unified, undoable bulk delete ──────────────────────────────────────────
+  // Every "delete this folder" action (a layer, a floorplan folder, a Plots
+  // folder, or any landmark/roads/polygons/pins folder) funnels through this
+  // one function. It captures full snapshots (including exact Map order)
+  // BEFORE deleting, performs the deletion, then pushes ONE combined
+  // undo/redo thunk to the shared history stack — so a single Undo restores
+  // everything (layer entry, floorplan overlay(s), every polygon, every pin)
+  // in its original order, in one step, and Redo re-deletes it all again.
+  const performBulkDelete = ({ polygonItems = [], pinItems = [], floorPlanIds = [], layerToRemove = null }) => {
+    const pm = polygonManagerRef.current;
+    const pnm = pinManagerRef.current;
+    const fpm = floorPlanManagerRef.current;
+
+    // Snapshot full original order (not just the deleted subset) so undo can
+    // rebuild the Map with everything back in its exact original position.
+    const polygonOrderKeys = pm ? Array.from(pm.polygons.keys()) : [];
+    const pinOrderKeys = pnm ? Array.from(pnm.pins.keys()) : [];
+    const fpOrderKeys = fpm ? Array.from(fpm.overlays.keys()) : [];
+
+    const polygonSnapshots = polygonItems.map(item => {
+      const entry = pm?.polygons.get(item.id);
+      if (!entry) return null;
+      return {
+        id: entry.id, name: entry.name, category: entry.category, layerId: entry.layerId,
+        color: entry.color, fillOpacity: entry.fillOpacity, strokeWeight: entry.strokeWeight,
+        path: entry.gPolygon.getPath().getArray().map(ll => ({ lat: ll.lat(), lng: ll.lng() })),
+        metadata: entry.metadata, visible: entry.itemVisible !== false,
+      };
+    }).filter(Boolean);
+
+    const pinSnapshots = pinItems.map(item => {
+      const entry = pnm?.pins.get(item.id);
+      if (!entry) return null;
+      return {
+        id: entry.id, name: entry.name, color: entry.color, position: entry.position,
+        styleMode: entry.styleMode, imageDataUrl: entry.imageDataUrl, layerId: entry.layerId,
+        metadata: entry.metadata, category: entry.category, landmarkType: entry.landmarkType,
+        customSize: entry.customSize, visible: entry.itemVisible !== false,
+      };
+    }).filter(Boolean);
+
+    // Floorplans: reuse the SAME overlay objects on undo (fast, no reload),
+    // same technique FloorPlanManager's own single-item delete already uses.
+    const fpEntries = floorPlanIds
+      .map(fid => ({ fid, entry: fpm?.overlays.get(fid) }))
+      .filter(x => x.entry);
+
+    const layerOriginalIndex = layerToRemove ? (project?.layers || []).findIndex(l => l.id === layerToRemove.id) : -1;
+
+    const rebuildOrder = (map, orderKeys) => {
+      const rebuilt = new Map();
+      orderKeys.forEach(k => { if (map.has(k)) rebuilt.set(k, map.get(k)); });
+      map.forEach((v, k) => { if (!rebuilt.has(k)) rebuilt.set(k, v); });
+      return rebuilt;
+    };
+
+    const doDelete = () => {
+      polygonSnapshots.forEach(s => pm?.deletePolygon(s.id, true));
+      pinSnapshots.forEach(s => pnm?.deletePin(s.id, true));
+      fpEntries.forEach(({ fid }) => fpm?.delete(fid, true));
+      if (layerToRemove) {
+        mutateLayersSilently(layers => layers.filter(l => l.id !== layerToRemove.id));
+      }
+      pm?.callbacks.onChange && pm.callbacks.onChange();
+      pnm?.callbacks.onChange && pnm.callbacks.onChange();
+      fpm?.callbacks.onChange && fpm.callbacks.onChange();
+    };
+
+    const doUndo = () => {
+      if (layerToRemove) {
+        mutateLayersSilently(layers => {
+          const next = [...layers];
+          const idx = layerOriginalIndex >= 0 ? Math.min(layerOriginalIndex, next.length) : next.length;
+          next.splice(idx, 0, layerToRemove);
+          return next;
+        });
+      }
+      fpEntries.forEach(({ fid, entry }) => {
+        entry.overlay.setMap(fpm.map);
+        fpm.overlays.set(fid, entry);
+      });
+      if (fpm && fpEntries.length) fpm.overlays = rebuildOrder(fpm.overlays, fpOrderKeys);
+      // Polygons/pins first, then reorder — loadPolygon/loadPin append to the end.
+      polygonSnapshots.forEach(s => pm?.loadPolygon(s));
+      if (pm) pm.polygons = rebuildOrder(pm.polygons, polygonOrderKeys);
+      pinSnapshots.forEach(s => pnm?.loadPin(s));
+      if (pnm) pnm.pins = rebuildOrder(pnm.pins, pinOrderKeys);
+
+      pm?.callbacks.onChange && pm.callbacks.onChange();
+      pnm?.callbacks.onChange && pnm.callbacks.onChange();
+      fpm?.callbacks.onChange && fpm.callbacks.onChange();
+    };
+
+    doDelete();
+    pushThunk({ undo: doUndo, redo: doDelete });
+
+    if (layerToRemove && selectedLayerItemId?.includes(layerToRemove.id)) setSelectedLayerItemId(null);
+    floorPlanIds.forEach(fid => {
+      if (selectedLayerItemId === `folder-${fid}` || selectedLayerItemId === `plots-${fid}`) setSelectedLayerItemId(null);
+      if (openFloorPlanFolderId === fid) setOpenFloorPlanFolderId(null);
+    });
+    setMenuOpenId(null);
+  };
+
   const handleDelete = (id, e) => {
     e.stopPropagation();
-    if (window.confirm("Are you sure you want to delete this layer? All features in it will be removed.")) {
-      // First delete features in this layer
-      if (polygonManagerRef.current) {
-        polygonManagerRef.current.getState().forEach(f => {
-          if (f.layerId === id) polygonManagerRef.current.deletePolygon(f.id, true);
-        });
+    const layerToRemove = (project?.layers || []).find(l => l.id === id);
+    if (!layerToRemove) return;
+    requestConfirm(
+      `Delete layer "${layerToRemove.name || 'this layer'}"? This permanently removes the layer and everything in it from the map, the Layers panel, and any export.`,
+      () => {
+        const pm = polygonManagerRef.current;
+        const pnm = pinManagerRef.current;
+        const fpm = floorPlanManagerRef.current;
+        const polygonItems = pm ? Array.from(pm.polygons.values()).filter(p => p.layerId === id) : [];
+        const pinItems = pnm ? Array.from(pnm.pins.values()).filter(p => p.layerId === id) : [];
+        const floorPlanIds = fpm ? Array.from(fpm.overlays.values()).filter(f => f.layerId === id).map(f => f.id) : [];
+        performBulkDelete({ polygonItems, pinItems, floorPlanIds, layerToRemove });
       }
-      if (pinManagerRef.current) {
-        pinManagerRef.current.getState().forEach(f => {
-          if (f.layerId === id) pinManagerRef.current.deletePin(f.id, true);
-        });
+    );
+  };
+
+  // Generic delete for a folder's worth of polygons/roads/pins (Roads,
+  // Polygons, Pins, or any per-landmark-type sub-folder). Confirms once,
+  // then removes each item — undoable as a single step.
+  const confirmAndDeleteItems = (items, label, e) => {
+    if (e) e.stopPropagation();
+    if (!items || items.length === 0) return;
+    const count = items.length;
+    requestConfirm(
+      `Delete ${label}? This permanently removes ${count} item${count > 1 ? 's' : ''} from the map, the Layers panel, and any export.`,
+      () => {
+        const polygonItems = items.filter(it => it.type !== 'pin');
+        const pinItems = items.filter(it => it.type === 'pin');
+        performBulkDelete({ polygonItems, pinItems });
       }
-      if (floorPlanManagerRef.current) {
-        floorPlanManagerRef.current.getState().forEach(f => {
-          if (f.layerId === id) floorPlanManagerRef.current.delete(f.id);
-        });
+    );
+  };
+
+  // Deletes an entire floorplan folder: the floorplan image itself, its
+  // boundary, every plot in its Plots folder, any other polygons, and any
+  // pins tied to it. This is the only folder that also removes a floorplan
+  // overlay from the map.
+  const handleDeleteFloorPlanFolder = (fp, folderId, e) => {
+    e.stopPropagation();
+    const label = project?.folderSettings?.[folderId]?.name || fp.name || 'this floor plan';
+    requestConfirm(
+      `Delete "${label}"? This permanently removes the floor plan image and everything inside it (boundary, plots, pins) from the map, the Layers panel, and any export.`,
+      () => {
+        const pm = polygonManagerRef.current;
+        const pnm = pinManagerRef.current;
+        const polygonItems = pm ? Array.from(pm.polygons.values()).filter(p => p.metadata?.floorPlanId === fp.id) : [];
+        const pinItems = pnm ? Array.from(pnm.pins.values()).filter(p => p.metadata?.floorPlanId === fp.id) : [];
+        performBulkDelete({ polygonItems, pinItems, floorPlanIds: [fp.id] });
       }
-      deleteLayer(id);
-      setMenuOpenId(null);
-    }
+    );
+  };
+
+  // Deletes only the plots inside a floorplan's Plots folder — the
+  // floorplan, its boundary, and any other content stay untouched.
+  const handleDeletePlotsFolder = (nestedPlots, plotsFolderId, e) => {
+    e.stopPropagation();
+    if (nestedPlots.length === 0) return;
+    requestConfirm(
+      `Delete all ${nestedPlots.length} plots in this Plots folder? This permanently removes them from the map, the Layers panel, and any export.`,
+      () => {
+        performBulkDelete({ polygonItems: nestedPlots });
+      }
+    );
   };
 
   const handleExport = (layerId, e) => {
@@ -530,7 +688,7 @@ export default function LayersPanel({ tick = 0 }) {
         <div
           className={`lp-child-item ${isChildSelected ? 'lp-child-item--active' : ''}`}
           onClick={(e) => handleChildClick(e, layerId, child)}
-          style={{ paddingLeft: isDeeplyNested ? 40 : (isNested ? 24 : 8), paddingRight: 4 }}
+          style={{ paddingLeft: isDeeplyNested ? 40 : (isNested ? 24 : 8) }}
           draggable
           onDragStart={(e) => handleItemDragStart(e, child.id, child.type)}
           onDragOver={handleDragOver}
@@ -856,6 +1014,7 @@ export default function LayersPanel({ tick = 0 }) {
                                         const folderName = project?.folderSettings?.[folderId]?.name || fp.name || 'Floor Plan';
                                         setTempLayerName(folderName);
                                       }}>Rename</button>
+                                      <button className="lp-dropdown-item lp-dropdown-item--danger" onClick={(e) => handleDeleteFloorPlanFolder(fp, folderId, e)}>Delete floor plan</button>
                                     </div>
                                   )}
                                 </div>
@@ -958,6 +1117,17 @@ export default function LayersPanel({ tick = 0 }) {
                                                 <span style={{ fontSize: '12px', fontWeight: 600, color: '#94a3b8', textTransform: 'uppercase', letterSpacing: '0.05em', flexGrow: 1 }}>
                                                   Plots ({nestedPlots.length})
                                                 </span>
+
+                                                <div className="lp-menu-wrap" style={{ marginRight: 8 }}>
+                                                  <button className="lp-menu-btn" onClick={(e) => handleMenuClick(plotsFolderId, e)}>
+                                                    <MoreIcon />
+                                                  </button>
+                                                  {menuOpenId === plotsFolderId && (
+                                                    <div className="lp-dropdown">
+                                                      <button className="lp-dropdown-item lp-dropdown-item--danger" onClick={(e) => handleDeletePlotsFolder(nestedPlots, plotsFolderId, e)}>Delete all plots</button>
+                                                    </div>
+                                                  )}
+                                                </div>
 
                                                 {(() => {
                                                   const settings = project?.folderSettings?.[plotsFolderId] || {};
@@ -1079,6 +1249,19 @@ export default function LayersPanel({ tick = 0 }) {
                   );
                 })()}
 
+                {allLandmarks.length > 0 && (
+                  <div className="lp-menu-wrap" style={{ marginRight: 8 }}>
+                    <button className="lp-menu-btn" onClick={(e) => handleMenuClick('landmarks-menu', e)}>
+                      <MoreIcon />
+                    </button>
+                    {menuOpenId === 'landmarks-menu' && (
+                      <div className="lp-dropdown">
+                        <button className="lp-dropdown-item lp-dropdown-item--danger" onClick={(e) => confirmAndDeleteItems(allLandmarks, 'all landmarks', e)}>Delete all landmarks</button>
+                      </div>
+                    )}
+                  </div>
+                )}
+
                 <button
                   className={`lp-expand-btn ${isExpanded ? 'lp-expand-btn--expanded' : ''}`}
                   style={{ visibility: allLandmarks.length > 0 ? 'visible' : 'hidden' }}
@@ -1159,6 +1342,17 @@ export default function LayersPanel({ tick = 0 }) {
                           </div>
                         )}
 
+                        <div className="lp-menu-wrap" style={{ marginRight: 8 }}>
+                          <button className="lp-menu-btn" onClick={(e) => handleMenuClick(`${folderId}-menu`, e)}>
+                            <MoreIcon />
+                          </button>
+                          {menuOpenId === `${folderId}-menu` && (
+                            <div className="lp-dropdown">
+                              <button className="lp-dropdown-item lp-dropdown-item--danger" onClick={(e) => confirmAndDeleteItems(items, `all ${title.toLowerCase()}`, e)}>Delete all {title.toLowerCase()}</button>
+                            </div>
+                          )}
+                        </div>
+
                         <button
                           className={`lp-expand-btn ${isFolderExpanded ? 'lp-expand-btn--expanded' : ''}`}
                           style={{ visibility: 'visible' }}
@@ -1228,6 +1422,17 @@ export default function LayersPanel({ tick = 0 }) {
                             </span>
 
                             <div className="lp-menu-wrap" style={{ marginRight: 8 }}>
+                              <button className="lp-menu-btn" onClick={(e) => handleMenuClick(`${pinsFolderId}-menu`, e)}>
+                                <MoreIcon />
+                              </button>
+                              {menuOpenId === `${pinsFolderId}-menu` && (
+                                <div className="lp-dropdown">
+                                  <button className="lp-dropdown-item lp-dropdown-item--danger" onClick={(e) => confirmAndDeleteItems(lmPins.map(p => ({ ...p, type: 'pin' })), 'all landmark pins', e)}>Delete all pins</button>
+                                </div>
+                              )}
+                            </div>
+
+                            <div className="lp-menu-wrap" style={{ marginRight: 8 }}>
                               <ColorPickerPopover
                                 color={pinsColor}
                                 onChange={(c) => handleColorChange(pinsFolderId, false, c, lmPins.map(p => ({ ...p, type: 'pin' })))}
@@ -1276,6 +1481,30 @@ export default function LayersPanel({ tick = 0 }) {
           );
         })()}
       </div>
+
+      {confirmDialog && (
+        <div
+          className="lp-confirm-backdrop"
+          onClick={() => setConfirmDialog(null)}
+        >
+          <div className="lp-confirm-dialog" onClick={(e) => e.stopPropagation()}>
+            <p className="lp-confirm-message">{confirmDialog.message}</p>
+            <div className="lp-confirm-actions">
+              <button className="lp-confirm-btn lp-confirm-btn--cancel" onClick={() => setConfirmDialog(null)}>Cancel</button>
+              <button
+                className="lp-confirm-btn lp-confirm-btn--danger"
+                onClick={() => {
+                  const { onConfirm } = confirmDialog;
+                  setConfirmDialog(null);
+                  onConfirm();
+                }}
+              >
+                Delete
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }

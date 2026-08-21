@@ -39,8 +39,15 @@ export const DUMMY_PROJECTS = [
 ];
 
 export function WorkspaceProvider({ children }) {
-  const { state: project, commit, pushThunk, undo, redo, canUndo, canRedo } =
+  const { state: project, commit, setPresentSilently, pushThunk, undo, redo, canUndo, canRedo } =
     useHistory(INITIAL_PROJECT);
+
+  // Directly mutates the layers array without pushing its own history entry
+  // — used inside a combined delete/undo thunk (see LayersPanel) so that
+  // "delete a layer and everything in it" undoes as ONE step, not several.
+  const mutateLayersSilently = useCallback((updater) => {
+    setPresentSilently((proj) => ({ ...proj, layers: updater(proj.layers || []) }));
+  }, [setPresentSilently]);
 
   // Each tool-group keeps its own highlight state so selecting a tool in one
   // group never clears the other group's active button. `lastGroup` tracks
@@ -305,6 +312,7 @@ export function WorkspaceProvider({ children }) {
         commitProject,
         getExportProject,
         pushThunk,
+        mutateLayersSilently,
         undo,
         redo,
         canUndo,

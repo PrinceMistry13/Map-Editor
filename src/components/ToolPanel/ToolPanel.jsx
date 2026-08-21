@@ -1122,8 +1122,18 @@ export default function ToolPanel() {
               if (zip) {
                 const imageFile = zip.file(href);
                 if (imageFile) {
-                  const imgBlob = await imageFile.async('blob');
-                  imageDataUrl = URL.createObjectURL(imgBlob);
+                  // Use a base64 data: URL, not a blob: URL. The pin icon is
+                  // rendered as an inline <image href="..."> inside an SVG
+                  // that's itself wrapped in a data:image/svg+xml URI — and
+                  // a blob: URL referenced from within a data: URI's opaque
+                  // origin silently fails to load in most browsers. A
+                  // self-contained base64 data: URL always works.
+                  const base64 = await imageFile.async('base64');
+                  const extMatch = /\.(png|jpe?g|gif|webp|svg)$/i.exec(href);
+                  const mime = extMatch
+                    ? { png: 'image/png', jpg: 'image/jpeg', jpeg: 'image/jpeg', gif: 'image/gif', webp: 'image/webp', svg: 'image/svg+xml' }[extMatch[1].toLowerCase()]
+                    : 'image/png';
+                  imageDataUrl = `data:${mime};base64,${base64}`;
                 }
               } else {
                 imageDataUrl = href;
