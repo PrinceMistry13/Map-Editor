@@ -287,6 +287,7 @@ function MapWorkspaceInner() {
     selectedPolygonEntry, setSelectedPolygonEntry,
     selectedFloorPlanId, setSelectedFloorPlanId,
     selectedLayerItemId, setSelectedLayerItemId,
+    openFloorPlanFolderId,
     selectedRoadEntry, setSelectedRoadEntry,
     roadPopupPos, setRoadPopupPos,
     floorPlanMode,
@@ -308,10 +309,24 @@ function MapWorkspaceInner() {
   const lastSelectedFloorPlanIdRef = useRef(null);
   const lastSelectedPinIdRef = useRef(null);
 
+  // Mirrors context's openFloorPlanFolderId — the floorplan whose folder
+  // dropdown is CURRENTLY open in the Layers panel (null if none is open).
+  const openFloorPlanFolderIdRef = useRef(openFloorPlanFolderId);
+  useEffect(() => { openFloorPlanFolderIdRef.current = openFloorPlanFolderId; }, [openFloorPlanFolderId]);
+
   const activeLayerIdRef = useRef(activeLayerId);
   const selectedLayerItemIdRef = useRef(selectedLayerItemId);
   useEffect(() => { activeLayerIdRef.current = activeLayerId; }, [activeLayerId]);
   useEffect(() => { selectedLayerItemIdRef.current = selectedLayerItemId; }, [selectedLayerItemId]);
+  useEffect(() => {
+    if (!selectedLayerItemId) return;
+    const match = /^(?:folder|plots)-(.+)$/.exec(selectedLayerItemId);
+    if (match) {
+      const fpId = match[1];
+      const stillExists = floorPlanManagerRef.current?.getState().some(f => f.id === fpId);
+      if (stillExists) lastLayersPanelFloorPlanIdRef.current = fpId;
+    }
+  }, [selectedLayerItemId, floorPlanManagerRef]);
 
   const activeLayerColor = project.layers?.find(l => l.id === activeLayerId)?.color || '#00CED1';
 
@@ -757,6 +772,48 @@ function MapWorkspaceInner() {
   // A closed polygon path is held here uncommitted until the user names it and
   // picks Landmark/Project — nothing is drawn as a real, selectable polygon
   // (and it never becomes editable) until "Done" is pressed.
+
+  // Determines which floorplan a new "unit" polygon would currently be routed
+  // to: an explicitly selected floorplan folder/Plots folder wins; otherwise
+  // fall back to whichever floorplan folder is currently OPEN (expanded) in
+  // the Layers panel; otherwise null (goes to global storage).
+  const resolveUnitFloorPlanId = useCallback(() => {
+    const selectedItem = selectedLayerItemIdRef.current;
+    if (selectedItem) {
+      const match = /^(?:folder|plots)-(.+)$/.exec(selectedItem);
+      if (match) {
+        const fpId = match[1];
+        const exists = floorPlanManagerRef.current?.getState().some(f => f.id === fpId);
+        if (exists) return fpId;
+      }
+    }
+    const openFpId = openFloorPlanFolderIdRef.current;
+    const openFpExists = openFpId && floorPlanManagerRef.current?.getState().some(f => f.id === openFpId);
+    return openFpExists ? openFpId : null;
+  }, [floorPlanManagerRef]);
+
+  // Computes the next auto-generated unit/plot name: a plain number
+  // continuing that floorplan's own Plots-folder sequence, or "Unit N"
+  // counting only floorplan-less units when floorPlanId is null (global).
+  const computeNextUnitName = useCallback((floorPlanId) => {
+    const pm = polygonManagerRef.current;
+    const polys = pm ? Array.from(pm.polygons.values()) : [];
+    if (floorPlanId) {
+      const samePlotFloorPlan = polys.filter(p => (p.category === 'unit' || p.category === 'pending-unit') && p.metadata?.floorPlanId === floorPlanId);
+      const highestPlotNo = samePlotFloorPlan.reduce((max, p) => {
+        const n = parseInt(p.name, 10);
+        const isPlainNumber = !isNaN(n) && n.toString() === (p.name || '').trim();
+        return isPlainNumber && n > max ? n : max;
+      }, 0);
+      const nextNo = highestPlotNo > 0 || samePlotFloorPlan.length === 0
+        ? highestPlotNo + 1
+        : samePlotFloorPlan.length + 1;
+      return `${nextNo}`;
+    }
+    const globalUnits = polys.filter(p => (p.category === 'unit' || p.category === 'pending-unit') && !p.metadata?.floorPlanId);
+    return `Unit ${globalUnits.length + 1}`;
+  }, [polygonManagerRef]);
+
   const beginNaming = useCallback((path) => {
     let defaultCat = 'project';
     if (isAutoPlotReviewMode) {
@@ -774,22 +831,25 @@ function MapWorkspaceInner() {
 
     const pm = polygonManagerRef.current;
     let count = 1;
-    if (pm) {
-      const polys = Array.from(pm.polygons.values());
-      if (defaultCat === 'landmark') count = polys.filter(p => p.category === 'landmark').length + 1;
-      else if (defaultCat === 'unit' || defaultCat === 'pending-unit') count = polys.filter(p => p.category === 'unit' || p.category === 'pending-unit').length + 1;
-      else count = polys.filter(p => p.category !== 'landmark' && p.category !== 'unit' && p.category !== 'pending-unit').length + 1;
-    }
-
     let defaultName = `Boundary ${count}`;
-    if (defaultCat === 'landmark') defaultName = `Landmark ${count}`;
-    else if (defaultCat === 'unit' || defaultCat === 'pending-unit') defaultName = `Unit ${count}`;
+
+    if (defaultCat === 'landmark') {
+      const polys = pm ? Array.from(pm.polygons.values()) : [];
+      count = polys.filter(p => p.category === 'landmark').length + 1;
+      defaultName = `Landmark ${count}`;
+    } else if (defaultCat === 'unit' || defaultCat === 'pending-unit') {
+      defaultName = computeNextUnitName(resolveUnitFloorPlanId());
+    } else {
+      const polys = pm ? Array.from(pm.polygons.values()) : [];
+      count = polys.filter(p => p.category !== 'landmark' && p.category !== 'unit' && p.category !== 'pending-unit').length + 1;
+      defaultName = `Boundary ${count}`;
+    }
 
     setPendingName(defaultName);
     setPendingCategory(defaultCat);
     setPendingPolygon({ path });
     setActiveTool(null);
-  }, [setActiveTool, polygonManagerRef, isAutoPlotReviewMode]);
+  }, [setActiveTool, polygonManagerRef, isAutoPlotReviewMode, computeNextUnitName, resolveUnitFloorPlanId]);
 
   const beginNamingRef = useRef(beginNaming);
   useEffect(() => { beginNamingRef.current = beginNaming; }, [beginNaming]);
@@ -799,18 +859,6 @@ function MapWorkspaceInner() {
     if (!pendingPolygon || !pm) return;
     const id = nextId('poly');
     const category = pendingCategory;
-
-    const polys = Array.from(pm.polygons.values());
-    let count = 1;
-    if (category === 'landmark') count = polys.filter(p => p.category === 'landmark').length + 1;
-    else if (category === 'unit' || category === 'pending-unit') count = polys.filter(p => p.category === 'unit' || p.category === 'pending-unit').length + 1;
-    else count = polys.filter(p => p.category !== 'landmark' && p.category !== 'unit' && p.category !== 'pending-unit').length + 1;
-
-    let fallbackName = `Boundary ${count}`;
-    if (category === 'landmark') fallbackName = `Landmark ${count}`;
-    else if (category === 'unit' || category === 'pending-unit') fallbackName = `Unit ${count}`;
-
-    const name = pendingName.trim() || fallbackName;
     const path = pendingPolygon.path;
 
     let targetLayerId = activeLayerIdRef.current;
@@ -841,19 +889,23 @@ function MapWorkspaceInner() {
     }
 
     let finalColor = activeLayerColor;
-    if (category === 'unit' || category === 'pending-unit') {
+    if (targetCategory === 'landmark') {
+      finalColor = '#8B5CF6'; // predefined purple for all landmark polygons
+    } else if (category === 'unit' || category === 'pending-unit') {
       finalColor = '#ff6b6b';
 
       if (category === 'unit') {
         if (selectedFloorplanFolder && floorplanExists) {
           // targetMetadata already has floorPlanId from the routing block above
         } else {
-          // Check if there is ANY floorplan in the active layer
-          const layerFps = floorPlanManagerRef.current?.getState().filter(f => f.layerId === targetLayerId) || [];
-          if (layerFps.length > 0) {
-            targetMetadata.floorPlanId = layerFps[0].id;
+          // No floorplan folder is directly selected right now — fall back to
+          // whichever floorplan folder is CURRENTLY OPEN (expanded) in the
+          // Layers panel. If none is open, the unit is stored globally.
+          const openFpId = openFloorPlanFolderIdRef.current;
+          const openFpStillExists = openFpId && floorPlanManagerRef.current?.getState().some(f => f.id === openFpId);
+          if (openFpStillExists) {
+            targetMetadata.floorPlanId = openFpId;
           } else {
-            // Add directly to the general Layer by ensuring no floorPlanId is attached.
             delete targetMetadata.floorPlanId;
           }
         }
@@ -867,6 +919,25 @@ function MapWorkspaceInner() {
       // Keep legacy logic just in case
       targetMetadata = { floorPlanId: selectedFloorPlanId };
     }
+
+    // Determine default/fallback name. For units, number continues from the
+    // specific floorplan's own Plots folder (not a project-wide count), so
+    // each floorplan keeps its own independent 1, 2, 3... sequence.
+    const polys = Array.from(pm.polygons.values());
+    let count = 1;
+    let fallbackName = `Boundary ${count}`;
+
+    if (category === 'landmark') {
+      count = polys.filter(p => p.category === 'landmark').length + 1;
+      fallbackName = `Landmark ${count}`;
+    } else if (category === 'unit' || category === 'pending-unit') {
+      fallbackName = computeNextUnitName(targetMetadata.floorPlanId || null);
+    } else {
+      count = polys.filter(p => p.category !== 'landmark' && p.category !== 'unit' && p.category !== 'pending-unit').length + 1;
+      fallbackName = `Boundary ${count}`;
+    }
+
+    const name = pendingName.trim() || fallbackName;
 
     // Uniform Style Override
     let targetContainerId = null;
@@ -908,7 +979,7 @@ function MapWorkspaceInner() {
       console.error('Polygon create error:', err);
     }
     setPendingPolygon(null);
-  }, [pendingPolygon, pendingName, pendingCategory, polygonManagerRef, selectedFloorPlanId, project]);
+  }, [pendingPolygon, pendingName, pendingCategory, polygonManagerRef, selectedFloorPlanId, project, computeNextUnitName]);
 
   const cancelPendingPolygon = useCallback(() => {
     setPendingPolygon(null);
@@ -916,26 +987,28 @@ function MapWorkspaceInner() {
 
   const handlePendingCategoryChange = useCallback((newCat) => {
     const pm = polygonManagerRef.current;
-    let count = 1;
-    if (pm) {
-      const polys = Array.from(pm.polygons.values());
-      if (newCat === 'landmark') count = polys.filter(p => p.category === 'landmark').length + 1;
-      else if (newCat === 'unit' || newCat === 'pending-unit') count = polys.filter(p => p.category === 'unit' || p.category === 'pending-unit').length + 1;
-      else count = polys.filter(p => p.category !== 'landmark' && p.category !== 'unit' && p.category !== 'pending-unit').length + 1;
-    }
+    const polys = pm ? Array.from(pm.polygons.values()) : [];
 
     const isUnchangedBoundary = /^Boundary \d+$/.test(pendingName);
     const isUnchangedLandmark = /^Landmark \d+$/.test(pendingName);
     const isUnchangedUnit = /^Unit \d+$/.test(pendingName);
+    const isUnchangedPlotNumber = /^\d+$/.test(pendingName.trim());
 
-    if (isUnchangedBoundary || isUnchangedLandmark || isUnchangedUnit || pendingName.trim() === '') {
-      let nextName = `Boundary ${count}`;
-      if (newCat === 'landmark') nextName = `Landmark ${count}`;
-      else if (newCat === 'unit' || newCat === 'pending-unit') nextName = `Unit ${count}`;
+    if (isUnchangedBoundary || isUnchangedLandmark || isUnchangedUnit || isUnchangedPlotNumber || pendingName.trim() === '') {
+      let nextName;
+      if (newCat === 'landmark') {
+        const count = polys.filter(p => p.category === 'landmark').length + 1;
+        nextName = `Landmark ${count}`;
+      } else if (newCat === 'unit' || newCat === 'pending-unit') {
+        nextName = computeNextUnitName(resolveUnitFloorPlanId());
+      } else {
+        const count = polys.filter(p => p.category !== 'landmark' && p.category !== 'unit' && p.category !== 'pending-unit').length + 1;
+        nextName = `Boundary ${count}`;
+      }
       setPendingName(nextName);
     }
     setPendingCategory(newCat);
-  }, [pendingName, polygonManagerRef]);
+  }, [pendingName, polygonManagerRef, computeNextUnitName, resolveUnitFloorPlanId]);
 
   // ── Wire map interaction per active tool ────────────────────────────────────
   useEffect(() => {

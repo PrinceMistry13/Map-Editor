@@ -54,6 +54,11 @@ export function WorkspaceProvider({ children }) {
   const [selectedPolygonEntry, setSelectedPolygonEntry] = useState(null);
   const [selectedFloorPlanId, setSelectedFloorPlanId] = useState(null);
   const [selectedLayerItemId, setSelectedLayerItemId] = useState(null);
+  // The floorplan whose folder dropdown is CURRENTLY open in the Layers
+  // panel (null if none is open). Drives where newly-drawn "unit" polygons
+  // get filed: into that floorplan's Plots folder while its folder is open,
+  // or globally into the layer once no floorplan folder is open.
+  const [openFloorPlanFolderId, setOpenFloorPlanFolderId] = useState(null);
   const [snapToGrid, setSnapToGrid] = useState(false);
   // Road selection — shared between MapWorkspace (popup) and LayersPanel (click-to-select)
   const [selectedRoadEntry, setSelectedRoadEntry] = useState(null);
@@ -319,6 +324,8 @@ export function WorkspaceProvider({ children }) {
         setSelectedFloorPlanId,
         selectedLayerItemId,
         setSelectedLayerItemId,
+        openFloorPlanFolderId,
+        setOpenFloorPlanFolderId,
         selectedRoadEntry,
         setSelectedRoadEntry,
         roadPopupPos,

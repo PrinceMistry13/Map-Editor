@@ -101,6 +101,7 @@ export default function LayersPanel({ tick = 0 }) {
     polygonManagerRef, pinManagerRef, floorPlanManagerRef,
     getExportProject,
     selectedLayerItemId, setSelectedLayerItemId,
+    openFloorPlanFolderId, setOpenFloorPlanFolderId,
     selectedRoadEntry, setSelectedRoadEntry, setRoadPopupPos,
   } = useWorkspace();
 
@@ -143,6 +144,19 @@ export default function LayersPanel({ tick = 0 }) {
         setSelectedLayerItemId(null);
       } else if (id.startsWith('folder-') && selectedLayerItemId === id.replace('folder-', 'plots-')) {
         setSelectedLayerItemId(null);
+      }
+    }
+    // Track which floorplan's folder is currently open, so newly-drawn unit
+    // polygons know whether to file into that floorplan's Plots folder or
+    // fall back to global storage. Only the top-level "folder-X" dropdown
+    // counts as "the floorplan folder is open" (its nested Plots sub-folder
+    // can't be open without this being open too).
+    if (id.startsWith('folder-')) {
+      const fpId = id.replace('folder-', '');
+      if (willCollapse) {
+        if (openFloorPlanFolderId === fpId) setOpenFloorPlanFolderId(null);
+      } else {
+        setOpenFloorPlanFolderId(fpId);
       }
     }
     setExpandedLayers(prev => ({ ...prev, [id]: !prev[id] }));

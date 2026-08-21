@@ -1060,7 +1060,7 @@ export default function ToolPanel() {
             const inPlots = ancestors[0] === 'Plots';
 
             const category = ext.appCategory || (inLandmarks ? 'landmark' : (inPlots ? 'unit' : 'project'));
-            const layerId = ext.appLayerId || activeLayerId;
+            const layerId = activeLayerId; // imported content always goes into the currently open/active layer, not the original exported layer
 
             // Find the actual floor-plan folder, skipping structural folder names.
             let fpFolderId = floorPlanId;
@@ -1093,7 +1093,7 @@ export default function ToolPanel() {
           if (path.length > 0) {
             const ext = readExtendedData(pm);
             const id = 'road-' + Date.now() + '-' + i;
-            const layerId = ext.appLayerId || activeLayerId;
+            const layerId = activeLayerId; // imported content always goes into the currently open/active layer, not the original exported layer
             const strokeWeight = parseFloat(ext.appLineWidth) || 3;
             const metadata = floorPlanId ? { floorPlanId } : undefined;
             let roadColor = extractColor(pm.getElementsByTagName('LineStyle')[0]) || '#FF9800';
@@ -1132,7 +1132,7 @@ export default function ToolPanel() {
 
             const pinColor = ext.appColor || extractColor(pm.getElementsByTagName('IconStyle')[0]) || '#00CED1';
             const customSize = parseFloat(ext.appCustomSize) || 1;
-            const layerId = ext.appLayerId || activeLayerId;
+            const layerId = activeLayerId; // imported content always goes into the currently open/active layer, not the original exported layer
 
             const ancestors = getAncestorFolderNames(pm);
             const inLandmarks = ancestors.includes('Landmarks');
