@@ -334,7 +334,8 @@ function PreviewMap() {
           p.layerId,
           p.metadata || {},
           p.category,
-          p.landmarkType
+          p.landmarkType,
+          p.customSize || 1
         );
         if (p.visible === false) {
           const entry = pinManagerRef.current.pins.get(pinId);

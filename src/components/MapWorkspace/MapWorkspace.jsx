@@ -352,6 +352,19 @@ function MapWorkspaceInner() {
     }
   };
 
+  // Same drag-start/drag-end pattern as the polygon sliders above, applied to
+  // a pin's custom size — setCustomSizeLive updates continuously while
+  // dragging (no history spam), commitCustomSize pushes one undo step on release.
+  const [pinSizeBefore, setPinSizeBefore] = useState(1);
+  const handlePinSizeDown = () => {
+    if (selectedPinEntry) setPinSizeBefore(selectedPinEntry.customSize ?? 1);
+  };
+  const handlePinSizeUp = (finalValue) => {
+    if (selectedPinEntry && pinManagerRef.current) {
+      pinManagerRef.current.commitCustomSize(selectedPinEntry.id, pinSizeBefore, finalValue);
+    }
+  };
+
   // Tool-specific drawing properties (not stored in history)
   const [toolProps, setToolProps] = useState(DEFAULT_TOOL_PROPS);
   const toolPropsRef = useRef(toolProps);
@@ -1862,6 +1875,27 @@ function MapWorkspaceInner() {
                           onChange={(e) => handlePinImageFile(e, selectedPinEntry.id)}
                         />
                       </label>
+                    </div>
+                  </div>
+                )}
+                {selectedPinEntry.styleMode === 'custom' && selectedPinEntry.category === 'project' && (
+                  <div className="poly-popup-cats-row" onMouseDown={(e) => e.stopPropagation()}>
+                    <span className="poly-popup-cats-label" style={{ width: '60px' }}>Size</span>
+                    <div style={{ flex: 1, display: 'flex', alignItems: 'center', gap: '8px', justifyContent: 'flex-end' }}>
+                      <input
+                        type="range"
+                        min="0.5"
+                        max="3"
+                        step="0.1"
+                        value={selectedPinEntry.customSize ?? 1}
+                        onPointerDown={handlePinSizeDown}
+                        onPointerUp={(e) => handlePinSizeUp(parseFloat(e.target.value))}
+                        onChange={(e) => pinManagerRef.current?.setCustomSizeLive(selectedPinEntry.id, parseFloat(e.target.value))}
+                        style={{ width: 80 }}
+                      />
+                      <span style={{ fontSize: '12px', color: '#fff', width: '32px' }}>
+                        {Math.round((selectedPinEntry.customSize ?? 1) * 100)}%
+                      </span>
                     </div>
                   </div>
                 )}

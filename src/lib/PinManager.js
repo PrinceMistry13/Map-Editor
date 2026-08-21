@@ -41,15 +41,15 @@ export default class PinManager {
     }
 
     // ---------------------------------------------------------------- lifecycle
-    createPin(id, name, color, position, styleMode = 'default', imageDataUrl = null, layerId = 'layer-1', metadata = {}, category = 'project', landmarkType = null) {
+    createPin(id, name, color, position, styleMode = 'default', imageDataUrl = null, layerId = 'layer-1', metadata = {}, category = 'project', landmarkType = null, customSize = 1) {
         const marker = new window.google.maps.Marker({
-            position, 
-            map: this.map, 
+            position,
+            map: this.map,
             draggable: false,
             zIndex: 100,
-            icon: pinSvgIcon(color, styleMode === 'custom' ? imageDataUrl : null, category, landmarkType),
+            icon: pinSvgIcon(color, styleMode === 'custom' ? imageDataUrl : null, category, landmarkType, customSize),
         });
-        const entry = { id, name, color, position, styleMode, imageDataUrl, layerId, category, landmarkType, marker, itemVisible: true, metadata };
+        const entry = { id, name, color, position, styleMode, imageDataUrl, layerId, category, landmarkType, marker, itemVisible: true, metadata, customSize };
         this.pins.set(id, entry);
 
         marker.addListener('click', (e) => {
@@ -82,7 +82,7 @@ export default class PinManager {
 
     loadPin(data) {
         if (!data.id) data.id = nextId('pin');
-        const entry = this.createPin(data.id, data.name, data.color, data.position, data.styleMode, data.imageDataUrl, data.layerId || 'layer-1', data.metadata || {}, data.category || 'project', data.landmarkType || null);
+        const entry = this.createPin(data.id, data.name, data.color, data.position, data.styleMode, data.imageDataUrl, data.layerId || 'layer-1', data.metadata || {}, data.category || 'project', data.landmarkType || null, data.customSize || 1);
         if (data.visible === false) {
             entry.itemVisible = false;
         }
@@ -144,10 +144,10 @@ export default class PinManager {
         if (!entry) return;
         const before = entry.color;
         entry.color = color;
-        entry.marker.setIcon(pinSvgIcon(color, entry.styleMode === 'custom' ? entry.imageDataUrl : null, entry.category, entry.landmarkType));
+        entry.marker.setIcon(pinSvgIcon(color, entry.styleMode === 'custom' ? entry.imageDataUrl : null, entry.category, entry.landmarkType, entry.customSize || 1));
         this.callbacks.pushHistory && this.callbacks.pushHistory({
-            undo: () => { entry.color = before; entry.marker.setIcon(pinSvgIcon(before, entry.styleMode === 'custom' ? entry.imageDataUrl : null, entry.category, entry.landmarkType)); this.callbacks.onChange && this.callbacks.onChange(); if (this.selectedId === id) this.callbacks.onSelect && this.callbacks.onSelect({ ...entry }); },
-            redo: () => { entry.color = color; entry.marker.setIcon(pinSvgIcon(color, entry.styleMode === 'custom' ? entry.imageDataUrl : null, entry.category, entry.landmarkType)); this.callbacks.onChange && this.callbacks.onChange(); if (this.selectedId === id) this.callbacks.onSelect && this.callbacks.onSelect({ ...entry }); },
+            undo: () => { entry.color = before; entry.marker.setIcon(pinSvgIcon(before, entry.styleMode === 'custom' ? entry.imageDataUrl : null, entry.category, entry.landmarkType, entry.customSize || 1)); this.callbacks.onChange && this.callbacks.onChange(); if (this.selectedId === id) this.callbacks.onSelect && this.callbacks.onSelect({ ...entry }); },
+            redo: () => { entry.color = color; entry.marker.setIcon(pinSvgIcon(color, entry.styleMode === 'custom' ? entry.imageDataUrl : null, entry.category, entry.landmarkType, entry.customSize || 1)); this.callbacks.onChange && this.callbacks.onChange(); if (this.selectedId === id) this.callbacks.onSelect && this.callbacks.onSelect({ ...entry }); },
         });
         this.callbacks.onChange && this.callbacks.onChange();
         if (this.selectedId === id) this.callbacks.onSelect && this.callbacks.onSelect({ ...entry });
@@ -158,7 +158,7 @@ export default class PinManager {
         if (!entry) return;
         if (!entry.originalColor) entry.originalColor = entry.color;
         entry.color = color;
-        entry.marker.setIcon(pinSvgIcon(color, entry.styleMode === 'custom' ? entry.imageDataUrl : null, entry.category, entry.landmarkType));
+        entry.marker.setIcon(pinSvgIcon(color, entry.styleMode === 'custom' ? entry.imageDataUrl : null, entry.category, entry.landmarkType, entry.customSize || 1));
         this.callbacks.onChange && this.callbacks.onChange();
         if (this.selectedId === id) this.callbacks.onSelect && this.callbacks.onSelect({ ...entry });
     }
@@ -167,7 +167,7 @@ export default class PinManager {
         const entry = this.pins.get(id);
         if (!entry || !entry.originalColor) return;
         entry.color = entry.originalColor;
-        entry.marker.setIcon(pinSvgIcon(entry.color, entry.styleMode === 'custom' ? entry.imageDataUrl : null, entry.category, entry.landmarkType));
+        entry.marker.setIcon(pinSvgIcon(entry.color, entry.styleMode === 'custom' ? entry.imageDataUrl : null, entry.category, entry.landmarkType, entry.customSize || 1));
         entry.originalColor = null;
         this.callbacks.onChange && this.callbacks.onChange();
         if (this.selectedId === id) this.callbacks.onSelect && this.callbacks.onSelect({ ...entry });
@@ -178,25 +178,36 @@ export default class PinManager {
         if (!entry) return;
         const beforeStyle = entry.styleMode;
         const beforeImg = entry.imageDataUrl;
-        
+        const beforeColor = entry.color;
+
         entry.styleMode = styleMode;
         if (imageDataUrl !== undefined) entry.imageDataUrl = imageDataUrl;
-        
-        const updateIcon = (mode, img) => entry.marker.setIcon(pinSvgIcon(entry.color, mode === 'custom' ? img : null, entry.category, entry.landmarkType));
-        updateIcon(styleMode, entry.imageDataUrl);
+
+        // Fix: predefined color for a pin newly switched to Custom style is
+        // black — only applied on the actual transition into custom, so
+        // re-selecting Custom on an already-custom pin (or the user's own
+        // later color-picker choice) is never overridden.
+        const switchingIntoCustom = styleMode === 'custom' && beforeStyle !== 'custom';
+        if (switchingIntoCustom) entry.color = '#000000';
+        const afterColor = entry.color;
+
+        const updateIcon = (mode, img, color) => entry.marker.setIcon(pinSvgIcon(color, mode === 'custom' ? img : null, entry.category, entry.landmarkType, entry.customSize || 1));
+        updateIcon(styleMode, entry.imageDataUrl, entry.color);
 
         this.callbacks.pushHistory && this.callbacks.pushHistory({
             undo: () => {
                 entry.styleMode = beforeStyle;
                 entry.imageDataUrl = beforeImg;
-                updateIcon(beforeStyle, beforeImg);
+                entry.color = beforeColor;
+                updateIcon(beforeStyle, beforeImg, beforeColor);
                 this.callbacks.onChange && this.callbacks.onChange();
                 if (this.selectedId === id) this.callbacks.onSelect && this.callbacks.onSelect({ ...entry });
             },
             redo: () => {
                 entry.styleMode = styleMode;
                 if (imageDataUrl !== undefined) entry.imageDataUrl = imageDataUrl;
-                updateIcon(styleMode, entry.imageDataUrl);
+                entry.color = afterColor;
+                updateIcon(styleMode, entry.imageDataUrl, afterColor);
                 this.callbacks.onChange && this.callbacks.onChange();
                 if (this.selectedId === id) this.callbacks.onSelect && this.callbacks.onSelect({ ...entry });
             },
@@ -211,19 +222,19 @@ export default class PinManager {
         const beforeCat = entry.category;
         const beforeType = entry.landmarkType;
         const beforeLayer = entry.layerId;
-        
+
         entry.category = category;
         if (landmarkType !== undefined) entry.landmarkType = landmarkType;
         if (newLayerId !== undefined) entry.layerId = newLayerId;
 
-        entry.marker.setIcon(pinSvgIcon(entry.color, entry.styleMode === 'custom' ? entry.imageDataUrl : null, entry.category, entry.landmarkType));
+        entry.marker.setIcon(pinSvgIcon(entry.color, entry.styleMode === 'custom' ? entry.imageDataUrl : null, entry.category, entry.landmarkType, entry.customSize || 1));
 
         this.callbacks.pushHistory && this.callbacks.pushHistory({
             undo: () => {
                 entry.category = beforeCat;
                 entry.landmarkType = beforeType;
                 entry.layerId = beforeLayer;
-                entry.marker.setIcon(pinSvgIcon(entry.color, entry.styleMode === 'custom' ? entry.imageDataUrl : null, entry.category, entry.landmarkType));
+                entry.marker.setIcon(pinSvgIcon(entry.color, entry.styleMode === 'custom' ? entry.imageDataUrl : null, entry.category, entry.landmarkType, entry.customSize || 1));
                 this.callbacks.onChange && this.callbacks.onChange();
                 if (this.selectedId === id) this.callbacks.onSelect && this.callbacks.onSelect({ ...entry });
             },
@@ -231,13 +242,36 @@ export default class PinManager {
                 entry.category = category;
                 if (landmarkType !== undefined) entry.landmarkType = landmarkType;
                 if (newLayerId !== undefined) entry.layerId = newLayerId;
-                entry.marker.setIcon(pinSvgIcon(entry.color, entry.styleMode === 'custom' ? entry.imageDataUrl : null, entry.category, entry.landmarkType));
+                entry.marker.setIcon(pinSvgIcon(entry.color, entry.styleMode === 'custom' ? entry.imageDataUrl : null, entry.category, entry.landmarkType, entry.customSize || 1));
                 this.callbacks.onChange && this.callbacks.onChange();
                 if (this.selectedId === id) this.callbacks.onSelect && this.callbacks.onSelect({ ...entry });
             },
         });
         this.callbacks.onChange && this.callbacks.onChange();
         if (this.selectedId === id) this.callbacks.onSelect && this.callbacks.onSelect({ ...entry });
+    }
+
+    // Custom pin size — bottom tip stays exactly on the marker's coordinate
+    // (see pinSvgIcon's anchor scaling); only the icon's overall scale grows
+    // or shrinks. Live update during a slider drag: no history push, so
+    // dragging doesn't spam the undo stack.
+    setCustomSizeLive(id, size) {
+        const entry = this.pins.get(id);
+        if (!entry) return;
+        entry.customSize = size;
+        entry.marker.setIcon(pinSvgIcon(entry.color, entry.styleMode === 'custom' ? entry.imageDataUrl : null, entry.category, entry.landmarkType, size));
+        this.callbacks.onChange && this.callbacks.onChange();
+        if (this.selectedId === id) this.callbacks.onSelect && this.callbacks.onSelect({ ...entry });
+    }
+
+    // Called once on slider release to push a single undo/redo step.
+    commitCustomSize(id, before, after) {
+        const entry = this.pins.get(id);
+        if (!entry) return;
+        this.callbacks.pushHistory && this.callbacks.pushHistory({
+            undo: () => this.setCustomSizeLive(id, before),
+            redo: () => this.setCustomSizeLive(id, after),
+        });
     }
 
     deletePin(id, skipHistory) {
@@ -283,7 +317,7 @@ export default class PinManager {
 
         keys.splice(draggedIdx, 1);
         const newTargetIdx = keys.indexOf(targetId);
-        
+
         if (draggedIdx < targetIdx) {
             keys.splice(newTargetIdx + 1, 0, draggedId);
         } else {
@@ -295,7 +329,7 @@ export default class PinManager {
             newMap.set(key, this.pins.get(key));
         }
         this.pins = newMap;
-        
+
         let zIdxCounter = 100;
         for (const entry of this.pins.values()) {
             entry.marker.setOptions({ zIndex: ++zIdxCounter });
@@ -328,7 +362,8 @@ export default class PinManager {
             landmarkType: entry.landmarkType || null,
             position: entry.marker.getPosition().toJSON(),
             metadata: entry.metadata || {},
-            visible: entry.itemVisible !== false
+            visible: entry.itemVisible !== false,
+            customSize: entry.customSize || 1
         }));
     }
 
@@ -339,7 +374,7 @@ export default class PinManager {
     }
 }
 
-function pinSvgIcon(color, imageDataUrl, category = 'project', landmarkType = null) {
+function pinSvgIcon(color, imageDataUrl, category = 'project', landmarkType = null, size = 1) {
     if (category === 'landmark' && landmarkType) {
         // Simple distinct line-style icons for each landmark type
         const icons = {
@@ -388,14 +423,20 @@ function pinSvgIcon(color, imageDataUrl, category = 'project', landmarkType = nu
   </svg>`;
         return {
             url: `data:image/svg+xml;charset=UTF-8,${encodeURIComponent(svg)}`,
-            scaledSize: new window.google.maps.Size(66, 56),
-            anchor: new window.google.maps.Point(33, 53),
+            // Fix: scale both scaledSize and anchor by the same factor. Google
+            // Maps places `anchor` (in the scaled icon's own pixel space) at
+            // the marker's exact lat/lng — since the anchor stays at the same
+            // RELATIVE position (the shape's bottom tip) regardless of size,
+            // the tip itself never moves off the marker's coordinate; only
+            // the balloon shape above it grows or shrinks.
+            scaledSize: new window.google.maps.Size(66 * size, 56 * size),
+            anchor: new window.google.maps.Point(33 * size, 53 * size),
         };
     } else {
         const defaultPath = "M12 0C6 0 1 5 1 11c0 8 11 19 11 19s11-11 11-19C23 5 18 0 12 0z";
         const svg = `<svg xmlns="http://www.w3.org/2000/svg" width="30" height="38" viewBox="0 0 24 30">
     <path d="${defaultPath}" fill="${color}" stroke="#0a0e13" stroke-width="1.2"/>
-    <circle cx="12" cy="11" r="4.2" fill="#0a0e13"/>
+    <circle cx="12" cy="11" r="4.2" fill="#ffffff"/>
   </svg>`;
         return {
             url: `data:image/svg+xml;charset=UTF-8,${encodeURIComponent(svg)}`,
