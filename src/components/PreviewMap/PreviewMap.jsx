@@ -56,6 +56,13 @@ const FloorPlanIcon = () => (
   </svg>
 );
 
+const LANDMARK_PIN_TYPE_LABELS = {
+  brts: 'BRTS', metro: 'Metro', railway: 'Railway', roads: 'Roads', bridges: 'Bridges',
+  circle: 'Circle', school: 'School', college: 'College', hospital: 'Hospital',
+  grocery: 'Grocery', garden: 'Garden', lake: 'Lake', temple: 'Temple',
+  multiplex: 'Multiplex', police: 'Police', textile: 'Textile', other: 'Other',
+};
+
 function LoadingScreen() {
   return (
     <div className="preview-loading">
@@ -653,11 +660,48 @@ function PreviewMap() {
                 );
               };
 
+              const pinsByType = {};
+              lmPins.forEach(p => {
+                const t = p.landmarkType || 'other';
+                if (!pinsByType[t]) pinsByType[t] = [];
+                pinsByType[t].push(p);
+              });
+
+              const pinsFolderId = 'lm-pins';
+              const isPinsExpanded = expandedLayers[pinsFolderId];
+              const allPinsVisible = lmPins.length > 0 && lmPins.every(p => p.itemVisible !== false && p.visible !== false);
+
               return (
                 <div className="preview-lp-children" style={{ marginLeft: 12 }}>
                   {renderFolder('Roads', 'lm-roads', lmRoads)}
                   {renderFolder('Polygons', 'lm-polygons', lmPolys)}
-                  {renderFolder('Pins', 'lm-pins', lmPins)}
+                  {lmPins.length > 0 && (
+                    <div key={pinsFolderId} style={{ display: 'flex', flexDirection: 'column' }}>
+                      <div className="preview-lp-layer-row" style={{ paddingLeft: 24, height: 28 }} onClick={(e) => toggleExpand(pinsFolderId, e)}>
+                        <button
+                          className={`preview-lp-toggle-btn ${!allPinsVisible ? 'preview-lp-toggle-btn--hidden' : ''}`}
+                          onClick={(e) => handleToggleBulkVisibility(e, lmPins, pinsFolderId)}
+                        >
+                          {allPinsVisible ? <EyeIcon /> : <EyeOffIcon />}
+                        </button>
+                        <div className="preview-lp-name-text" style={{ fontSize: '12px', color: '#94a3b8', textTransform: 'uppercase' }}>
+                          Pins ({lmPins.length})
+                        </div>
+                        <button className={`preview-lp-expand-btn ${isPinsExpanded ? 'preview-lp-expand-btn--expanded' : ''}`}>
+                          <ChevronIcon />
+                        </button>
+                      </div>
+                      {isPinsExpanded && (
+                        <div style={{ marginLeft: 16 }}>
+                          {Object.keys(pinsByType).sort().map(t => renderFolder(
+                            LANDMARK_PIN_TYPE_LABELS[t] || t,
+                            `lm-pins-${t}`,
+                            pinsByType[t]
+                          ))}
+                        </div>
+                      )}
+                    </div>
+                  )}
                 </div>
               );
             })()}

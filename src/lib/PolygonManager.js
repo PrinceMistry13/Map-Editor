@@ -93,13 +93,13 @@ export default class PolygonManager {
         return;
       }
       e.domEvent && e.domEvent.stopPropagation();
-      
+
       // If we are already editing this very polygon/road, do not exit edit mode on click
       // (e.g. clicking the stroke to add a vertex should not abort the edit session).
       if (this.isEditing && this.selectedId === id) {
         return;
       }
-      
+
       const currentCategory = this.polygons.get(id)?.category || 'project';
       gPolygon.setOptions({ zIndex: this.getBaseZIndex(currentCategory) + (++this.zCounter) });
       this.select(id, e.latLng ? e.latLng.toJSON() : null);
@@ -109,7 +109,7 @@ export default class PolygonManager {
       if (e.latLng) {
         this.lastMouseLatLng = e.latLng;
       }
-      
+
       if (!this.isEditing || this.selectedId !== id) return;
       if (!e.latLng || !window.google?.maps?.geometry?.spherical) return;
 
@@ -146,7 +146,7 @@ export default class PolygonManager {
         const pObj = gPolygon.getPath();
         const currentCat = this.polygons.get(id)?.category || 'project';
         const isRoad = currentCat === 'road' || currentCat === 'bridge';
-        
+
         if (isRoad && pObj.getLength() <= 2) {
           alert('A road needs at least 2 points.');
           return;
@@ -154,7 +154,7 @@ export default class PolygonManager {
           alert('A polygon must have at least 3 vertices.');
           return;
         }
-        
+
         if (entry.takeSnapshot) entry.takeSnapshot();
         pObj.removeAt(e.vertex);
       }
@@ -257,7 +257,7 @@ export default class PolygonManager {
     }
 
     if (targetIndex === null) return;
-    
+
     // Check minimum vertices based on type
     if (entry.category === 'road' || entry.category === 'bridge') {
       if (path.getLength() <= 2) {

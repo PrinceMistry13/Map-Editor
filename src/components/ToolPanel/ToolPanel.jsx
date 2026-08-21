@@ -139,6 +139,15 @@ const blobUrlToBytes = async (url) => {
   }
 };
 
+const LANDMARK_PIN_TYPE_LABELS = {
+  brts: 'BRTS', metro: 'Metro', railway: 'Railway', roads: 'Roads', bridges: 'Bridges',
+  circle: 'Circle', school: 'School', college: 'College', hospital: 'Hospital',
+  grocery: 'Grocery', garden: 'Garden', lake: 'Lake', temple: 'Temple',
+  multiplex: 'Multiplex', police: 'Police', textile: 'Textile', other: 'Other',
+};
+const LANDMARK_PIN_LABEL_TO_TYPE = Object.entries(LANDMARK_PIN_TYPE_LABELS)
+  .reduce((acc, [k, v]) => { acc[v.toLowerCase()] = k; return acc; }, {});
+
 const generateKMLString = (data, exportMode = 'kml') => {
   let kml = `<?xml version="1.0" encoding="UTF-8"?>\n<kml xmlns="http://www.opengis.net/kml/2.2" xmlns:gx="http://www.google.com/kml/ext/2.2">\n  <Document>\n    <name>${data.id || 'Exported Project'}</name>\n`;
 
@@ -147,6 +156,10 @@ const generateKMLString = (data, exportMode = 'kml') => {
     const match = String(key).match(/-?\d+/);
     return match ? parseInt(match[0], 10) : Number.POSITIVE_INFINITY;
   };
+
+  const lmRoadItems = [];
+  const lmPolyItems = [];
+  const lmPinsByType = {};
 
   const fpBuckets = {};
   if (data.floorPlans) {
@@ -171,19 +184,7 @@ const generateKMLString = (data, exportMode = 'kml') => {
     data.polygons.forEach((poly, i) => {
       if (!poly.path || poly.path.length < 3) return;
 
-      let drawOrder = 1;
       const altMode = 'clampToGround';
-
-      if (poly.category === 'project') {
-        // no-op
-      } else if (poly.category === 'landmark') {
-        drawOrder = 2;
-      } else if (poly.category === 'unit') {
-        drawOrder = 3;
-      } else if (poly.category === 'pending-unit') {
-        drawOrder = 4;
-      }
-
       const coords = [...poly.path, poly.path[0]].map(p => `${p.lng},${p.lat},0`).join(' ');
 
       let styleStr = '';
@@ -209,9 +210,15 @@ const generateKMLString = (data, exportMode = 'kml') => {
         }
       }
 
+      const extData = `
+      <ExtendedData>
+        <Data name="appCategory"><value>${poly.category || 'project'}</value></Data>
+        <Data name="appLayerId"><value>${poly.layerId || 'layer-1'}</value></Data>
+      </ExtendedData>`;
+
       const str = `
     <Placemark>
-      <name>${poly.name || `Polygon ${i + 1}`}</name>${styleStr}
+      <name>${poly.name || `Polygon ${i + 1}`}</name>${styleStr}${extData}
       <Polygon>
         <tessellate>1</tessellate>
         <altitudeMode>${altMode}</altitudeMode>
@@ -222,7 +229,12 @@ const generateKMLString = (data, exportMode = 'kml') => {
         </outerBoundaryIs>
       </Polygon>
     </Placemark>`;
-      addStr(poly.metadata, str, poly.category === 'unit' || poly.category === 'pending-unit', poly.name || `Polygon ${i + 1}`);
+
+      if (poly.category === 'landmark') {
+        lmPolyItems.push(str);
+      } else {
+        addStr(poly.metadata, str, poly.category === 'unit' || poly.category === 'pending-unit', poly.name || `Polygon ${i + 1}`);
+      }
     });
   }
 
@@ -232,11 +244,11 @@ const generateKMLString = (data, exportMode = 'kml') => {
       if (!roadPath || roadPath.length < 2) return;
 
       const altMode = 'clampToGround';
-      const drawOrder = 2;
       const coords = roadPath.map(p => `${p.lng},${p.lat},0`).join(' ');
 
       let styleStr = '';
       const rColor = road.lineColor || road.color;
+      const width = road.lineWidth || road.strokeWeight || 3;
       if (rColor) {
         const hex = rColor.replace('#', '');
         if (hex.length === 6) {
@@ -244,7 +256,6 @@ const generateKMLString = (data, exportMode = 'kml') => {
           const g = hex.substring(2, 4);
           const b = hex.substring(4, 6);
           const kmlLineColor = `ff${b}${g}${r}`;
-          const width = road.lineWidth || road.strokeWeight || 3;
           styleStr = `
       <Style>
         <LineStyle>
@@ -255,44 +266,84 @@ const generateKMLString = (data, exportMode = 'kml') => {
         }
       }
 
+      const extData = `
+      <ExtendedData>
+        <Data name="appCategory"><value>road</value></Data>
+        <Data name="appLayerId"><value>${road.layerId || 'layer-1'}</value></Data>
+        <Data name="appLineWidth"><value>${width}</value></Data>
+      </ExtendedData>`;
+
       const str = `
     <Placemark>
-      <name>${road.name || `Road ${i + 1}`}</name>${styleStr}
+      <name>${road.name || `Road ${i + 1}`}</name>${styleStr}${extData}
       <LineString>
         <tessellate>1</tessellate>
         <altitudeMode>${altMode}</altitudeMode>
-        <gx:drawOrder>${drawOrder}</gx:drawOrder>
+        <gx:drawOrder>2</gx:drawOrder>
         <coordinates>${coords}</coordinates>
       </LineString>
     </Placemark>`;
-      addStr(road.metadata, str);
+      lmRoadItems.push(str);
     });
   }
 
   if (data.pins) {
     data.pins.forEach((pin, i) => {
       if (!pin.position) return;
-      let styleStr = '';
+
+      const scale = pin.customSize || 1;
+      let iconHref;
+      let colorTag = '';
       if (pin.styleMode === 'custom' && pin.imageDataUrl) {
-        const href = (exportMode === 'kmz') ? `files/pin-${pin.id}.png` : pin.imageDataUrl;
-        styleStr = `
+        iconHref = (exportMode === 'kmz') ? `files/pin-${pin.id}.png` : pin.imageDataUrl;
+      } else {
+        // Standard Google Earth pin, tinted to match the editor's pin color —
+        // default-style pins previously exported with no color/size at all.
+        iconHref = 'http://maps.google.com/mapfiles/kml/paddle/wht-blank.png';
+        const hex = (pin.color || '#00CED1').replace('#', '');
+        if (hex.length === 6) {
+          const r = hex.substring(0, 2), g = hex.substring(2, 4), b = hex.substring(4, 6);
+          colorTag = `
+          <color>ff${b}${g}${r}</color>`;
+        }
+      }
+
+      const styleStr = `
       <Style>
-        <IconStyle>
+        <IconStyle>${colorTag}
+          <scale>${scale}</scale>
           <Icon>
-            <href>${href}</href>
+            <href>${iconHref}</href>
           </Icon>
         </IconStyle>
       </Style>`;
-      }
+
+      const extData = `
+      <ExtendedData>
+        <Data name="appCategory"><value>${pin.category || 'project'}</value></Data>
+        <Data name="appLandmarkType"><value>${pin.landmarkType || ''}</value></Data>
+        <Data name="appLayerId"><value>${pin.layerId || 'layer-1'}</value></Data>
+        <Data name="appStyleMode"><value>${pin.styleMode || 'default'}</value></Data>
+        <Data name="appColor"><value>${pin.color || ''}</value></Data>
+        <Data name="appCustomSize"><value>${scale}</value></Data>
+      </ExtendedData>`;
+
       const str = `
     <Placemark>
-      <name>${pin.name || `Pin ${i + 1}`}</name>${styleStr}
+      <name>${pin.name || `Pin ${i + 1}`}</name>${styleStr}${extData}
       <Point>
         <altitudeMode>clampToGround</altitudeMode>
         <coordinates>${pin.position.lng},${pin.position.lat},0</coordinates>
       </Point>
     </Placemark>`;
-      addStr(pin.metadata, str);
+
+      if (pin.category === 'landmark') {
+        const t = pin.landmarkType || 'other';
+        if (!lmPinsByType[t]) lmPinsByType[t] = [];
+        lmPinsByType[t].push(str);
+      } else {
+        addStr(pin.metadata, str);
+      }
     });
   }
 
@@ -351,7 +402,7 @@ ${sortedPlotItems.map(p => p.str).join('')}
       <GroundOverlay>
         <name>${name}</name>
         <gx:drawOrder>0</gx:drawOrder>
-        <gx:altitudeMode>clampToGround</gx:altitudeMode>
+        <altitudeMode>clampToGround</altitudeMode>
         <Icon>
           <href>${href}</href>
         </Icon>
@@ -371,7 +422,7 @@ ${sortedPlotItems.map(p => p.str).join('')}
       <GroundOverlay>
         <name>${name}</name>
         <gx:drawOrder>0</gx:drawOrder>
-        <gx:altitudeMode>clampToSeaFloor</gx:altitudeMode>
+        <altitudeMode>clampToGround</altitudeMode>
         <ExtendedData>
           <Data name="isDistorted">
             <value>${isDistortedStr}</value>
@@ -395,7 +446,7 @@ ${sortedPlotItems.map(p => p.str).join('')}
       <GroundOverlay>
         <name>${name}</name>
         <gx:drawOrder>0</gx:drawOrder>
-        <gx:altitudeMode>clampToSeaFloor</gx:altitudeMode>
+        <altitudeMode>clampToGround</altitudeMode>
         <Icon>
           <href>${href}</href>
         </Icon>
@@ -415,6 +466,36 @@ ${sortedPlotItems.map(p => p.str).join('')}
 ${items.join('')}${plotsFolderStr}
     </Folder>`;
     });
+  }
+
+  if (lmRoadItems.length > 0 || lmPolyItems.length > 0 || Object.keys(lmPinsByType).length > 0) {
+    const roadsFolderStr = lmRoadItems.length > 0 ? `
+    <Folder>
+      <name>Roads</name>
+${lmRoadItems.join('')}
+    </Folder>` : '';
+
+    const polygonsFolderStr = lmPolyItems.length > 0 ? `
+    <Folder>
+      <name>Polygons</name>
+${lmPolyItems.join('')}
+    </Folder>` : '';
+
+    const pinTypeKeys = Object.keys(lmPinsByType).sort();
+    const pinsFolderStr = pinTypeKeys.length > 0 ? `
+    <Folder>
+      <name>Pins</name>
+${pinTypeKeys.map(t => `
+      <Folder>
+        <name>${LANDMARK_PIN_TYPE_LABELS[t] || t}</name>
+${lmPinsByType[t].join('')}
+      </Folder>`).join('')}
+    </Folder>` : '';
+
+    kml += `
+    <Folder>
+      <name>Landmarks</name>${roadsFolderStr}${polygonsFolderStr}${pinsFolderStr}
+    </Folder>`;
   }
 
   if (globalItems.length > 0 || globalPlotItems.length > 0) {
@@ -790,6 +871,34 @@ export default function ToolPanel() {
     }
   };
 
+  const getAncestorFolderNames = (node) => {
+    const names = [];
+    let cur = node.parentNode;
+    while (cur) {
+      const tag = cur.tagName || cur.nodeName || cur.localName;
+      if (tag === 'Folder') {
+        const nameNode = Array.from(cur.childNodes || []).find(c => (c.tagName || c.nodeName) === 'name');
+        const nm = nameNode?.textContent?.trim();
+        if (nm) names.push(nm);
+      }
+      cur = cur.parentNode;
+    }
+    return names; // immediate parent Folder name first, root-most last
+  };
+
+  const readExtendedData = (pm) => {
+    const ext = pm.getElementsByTagName('ExtendedData')[0];
+    const out = {};
+    if (!ext) return out;
+    const dataNodes = ext.getElementsByTagName('Data');
+    for (let d = 0; d < dataNodes.length; d++) {
+      const nm = dataNodes[d].getAttribute('name');
+      const val = dataNodes[d].getElementsByTagName('value')[0]?.textContent;
+      if (nm) out[nm] = val;
+    }
+    return out;
+  };
+
   const processKMLDoc = async (doc, zip) => {
     let minLat = 90, maxLat = -90, minLng = 180, maxLng = -180;
     let hasBounds = false;
@@ -945,18 +1054,27 @@ export default function ToolPanel() {
           }).filter(p => !isNaN(p.lat) && !isNaN(p.lng));
 
           if (path.length > 0) {
-            const altMode = polygon.getElementsByTagName('altitudeMode')[0]?.textContent;
-            const drawOrder = parseInt(polygon.getElementsByTagName('gx:drawOrder')[0]?.textContent || '1');
-            let category = 'project';
-            if (altMode === 'relativeToGround' && drawOrder === 2) category = 'landmark';
-            else if (altMode === 'relativeToGround' && drawOrder === 3) category = 'unit';
-            else if (altMode === 'relativeToGround' && drawOrder === 4) category = 'pending-unit';
+            const ext = readExtendedData(pm);
+            const ancestors = getAncestorFolderNames(pm);
+            const inLandmarks = ancestors.includes('Landmarks');
+            const inPlots = ancestors[0] === 'Plots';
+
+            const category = ext.appCategory || (inLandmarks ? 'landmark' : (inPlots ? 'unit' : 'project'));
+            const layerId = ext.appLayerId || activeLayerId;
+
+            // Find the actual floor-plan folder, skipping structural folder names.
+            let fpFolderId = floorPlanId;
+            if (!fpFolderId) {
+              const structural = new Set(['Plots', 'Landmarks', 'Roads', 'Polygons', 'Pins', ...Object.values(LANDMARK_PIN_TYPE_LABELS)]);
+              const fpName = ancestors.find(a => !structural.has(a) && floorPlanMap[a]);
+              if (fpName) fpFolderId = floorPlanMap[fpName];
+            }
 
             const isBoundary = category === 'project';
-            const id = (isBoundary && floorPlanId) ? `floorplan-boundary-${floorPlanId}` : 'poly-' + Date.now() + '-' + i;
-            const metadata = floorPlanId ? { floorPlanId } : undefined;
+            const id = (isBoundary && fpFolderId) ? `floorplan-boundary-${fpFolderId}` : 'poly-' + Date.now() + '-' + i;
+            const metadata = fpFolderId ? { floorPlanId: fpFolderId } : undefined;
             polygonManagerRef.current?.loadPolygon({
-              id, name, category, path, color: polyColor, metadata, layerId: activeLayerId
+              id, name, category, path, color: polyColor, metadata, layerId
             });
           }
         }
@@ -973,12 +1091,14 @@ export default function ToolPanel() {
           }).filter(p => !isNaN(p.lat) && !isNaN(p.lng));
 
           if (path.length > 0) {
+            const ext = readExtendedData(pm);
             const id = 'road-' + Date.now() + '-' + i;
-            // Parse color/width if present in style, else default
+            const layerId = ext.appLayerId || activeLayerId;
+            const strokeWeight = parseFloat(ext.appLineWidth) || 3;
             const metadata = floorPlanId ? { floorPlanId } : undefined;
             let roadColor = extractColor(pm.getElementsByTagName('LineStyle')[0]) || '#FF9800';
             polygonManagerRef.current?.loadPolygon({
-              id, name, category: 'road', path, color: roadColor, strokeWeight: 3, metadata, layerId: activeLayerId
+              id, name, category: 'road', path, color: roadColor, strokeWeight, metadata, layerId
             });
           }
         }
@@ -992,9 +1112,13 @@ export default function ToolPanel() {
           if (!isNaN(lat) && !isNaN(lng)) {
             updateBounds(lat, lng);
 
-            let imageDataUrl = null;
+            const ext = readExtendedData(pm);
             const href = pm.getElementsByTagName('href')[0]?.textContent;
-            if (href) {
+            const isStockIcon = href && href.includes('maps.google.com/mapfiles');
+            const wantsCustom = ext.appStyleMode ? ext.appStyleMode === 'custom' : !isStockIcon;
+
+            let imageDataUrl = null;
+            if (href && wantsCustom && !isStockIcon) {
               if (zip) {
                 const imageFile = zip.file(href);
                 if (imageFile) {
@@ -1006,12 +1130,26 @@ export default function ToolPanel() {
               }
             }
 
-            let pinColor = extractColor(pm.getElementsByTagName('IconStyle')[0]) || '#00CED1';
+            const pinColor = ext.appColor || extractColor(pm.getElementsByTagName('IconStyle')[0]) || '#00CED1';
+            const customSize = parseFloat(ext.appCustomSize) || 1;
+            const layerId = ext.appLayerId || activeLayerId;
 
+            const ancestors = getAncestorFolderNames(pm);
+            const inLandmarks = ancestors.includes('Landmarks');
+            const category = ext.appCategory || (inLandmarks ? 'landmark' : 'project');
+            let landmarkType = ext.appLandmarkType || null;
+            if (!landmarkType && category === 'landmark') {
+              const typeFolder = ancestors.find(a => LANDMARK_PIN_LABEL_TO_TYPE[a.toLowerCase()]);
+              landmarkType = typeFolder ? LANDMARK_PIN_LABEL_TO_TYPE[typeFolder.toLowerCase()] : 'other';
+            }
+
+            const resolvedStyleMode = ext.appStyleMode || (imageDataUrl ? 'custom' : 'default');
             const id = 'pin-' + Date.now() + '-' + i;
             const metadata = floorPlanId ? { floorPlanId } : undefined;
             pinManagerRef.current?.loadPin({
-              id, name, color: pinColor, position: { lat, lng }, styleMode: imageDataUrl ? 'custom' : 'default', imageDataUrl, metadata, layerId: activeLayerId
+              id, name, color: pinColor, position: { lat, lng },
+              styleMode: resolvedStyleMode, imageDataUrl, metadata, layerId,
+              category, landmarkType, customSize
             });
           }
         }

@@ -86,6 +86,13 @@ const FloorPlanIcon = () => (
   </svg>
 );
 
+const LANDMARK_PIN_TYPE_LABELS = {
+  brts: 'BRTS', metro: 'Metro', railway: 'Railway', roads: 'Roads', bridges: 'Bridges',
+  circle: 'Circle', school: 'School', college: 'College', hospital: 'Hospital',
+  grocery: 'Grocery', garden: 'Garden', lake: 'Lake', temple: 'Temple',
+  multiplex: 'Multiplex', police: 'Police', textile: 'Textile', other: 'Other',
+};
+
 export default function LayersPanel({ tick = 0 }) {
   const {
     project,
@@ -101,7 +108,7 @@ export default function LayersPanel({ tick = 0 }) {
   const [menuOpenId, setMenuOpenId] = useState(null);
   const [editingLayerId, setEditingLayerId] = useState(null);
   const [tempLayerName, setTempLayerName] = useState("");
-  
+
   const replaceFileRef = useRef(null);
   const [replacingFloorPlanId, setReplacingFloorPlanId] = useState(null);
 
@@ -275,7 +282,7 @@ export default function LayersPanel({ tick = 0 }) {
 
   const landmarkPolys = pmState.filter(f => f.category === 'landmark' || f.category === 'road' || f.category === 'bridge').map(f => ({ ...f, type: (f.category === 'road' || f.category === 'bridge') ? 'road' : 'polygon' }));
   const landmarkPins = pnmState.filter(f => f.category === 'landmark').map(f => ({ ...f, type: 'pin' }));
-  
+
   if (expandedLayers['landmarks']) {
     allRenderedChildren.push(...landmarkPolys, ...landmarkPins);
   }
@@ -350,9 +357,9 @@ export default function LayersPanel({ tick = 0 }) {
     if (isBulk === 'landmarks') {
       const landmarkPolys = pmState.filter(f => f.category === 'landmark' || f.category === 'road' || f.category === 'bridge');
       const landmarkPins = pnmState.filter(f => f.category === 'landmark');
-      
+
       const newState = !landmarkPolys.every(p => p.visible !== false) || !landmarkPins.every(p => p.visible !== false);
-      
+
       landmarkPolys.forEach(p => {
         const entry = polygonManagerRef.current?.polygons.get(p.id);
         if (entry) entry.itemVisible = newState;
@@ -1071,7 +1078,7 @@ export default function LayersPanel({ tick = 0 }) {
                 const lmPolys = landmarkPolys.filter(p => p.type === 'polygon');
                 const lmPins = landmarkPins;
 
-                const renderNestedFolder = (title, folderId, items, defaultColor, type) => {
+                const renderNestedFolder = (title, folderId, items, defaultColor, type, parentUniform = false) => {
                   if (items.length === 0) return null;
                   const isFolderExpanded = expandedLayers[folderId];
                   const allVisible = items.every(p => p.visible !== false);
@@ -1117,24 +1124,26 @@ export default function LayersPanel({ tick = 0 }) {
                           {title} ({items.length})
                         </span>
 
-                        <div className="lp-menu-wrap" style={{ marginRight: 8 }}>
-                          <ColorPickerPopover
-                            color={color}
-                            onChange={(c) => handleColorChange(folderId, false, c, items)}
-                            styleMode={styleMode}
-                            onStyleModeChange={(newMode) => handleStyleModeToggle(folderId, false, newMode, color, items)}
-                            triggerElement={
-                              styleMode === 'uniform' ? null : (
-                                <button
-                                  className="lp-style-btn"
-                                  title="Style Mode"
-                                >
-                                  <PaintBrushIcon />
-                                </button>
-                              )
-                            }
-                          />
-                        </div>
+                        {!parentUniform && (
+                          <div className="lp-menu-wrap" style={{ marginRight: 8 }}>
+                            <ColorPickerPopover
+                              color={color}
+                              onChange={(c) => handleColorChange(folderId, false, c, items)}
+                              styleMode={styleMode}
+                              onStyleModeChange={(newMode) => handleStyleModeToggle(folderId, false, newMode, color, items)}
+                              triggerElement={
+                                styleMode === 'uniform' ? null : (
+                                  <button
+                                    className="lp-style-btn"
+                                    title="Style Mode"
+                                  >
+                                    <PaintBrushIcon />
+                                  </button>
+                                )
+                              }
+                            />
+                          </div>
+                        )}
 
                         <button
                           className={`lp-expand-btn ${isFolderExpanded ? 'lp-expand-btn--expanded' : ''}`}
@@ -1146,18 +1155,106 @@ export default function LayersPanel({ tick = 0 }) {
                       </div>
                       {isFolderExpanded && (
                         <div className="lp-nested-children">
-                          {items.map(nc => renderItemChild(nc, null, false, true, isUniform))}
+                          {items.map(nc => renderItemChild(nc, null, false, true, isUniform || parentUniform))}
                         </div>
                       )}
                     </div>
                   );
                 };
 
+                const pinsByType = {};
+                lmPins.forEach(p => {
+                  const t = p.landmarkType || 'other';
+                  if (!pinsByType[t]) pinsByType[t] = [];
+                  pinsByType[t].push(p);
+                });
+                const pinsFolderId = 'lm-pins';
+                const isPinsExpanded = expandedLayers[pinsFolderId];
+                const allPinsVisible = lmPins.length > 0 && lmPins.every(p => p.visible !== false);
+
                 return (
                   <>
                     {renderNestedFolder('Roads', 'lm-roads', lmRoads, '#FF9800', 'road')}
                     {renderNestedFolder('Polygons', 'lm-polygons', lmPolys, '#2ecc71', 'polygon')}
-                    {renderNestedFolder('Pins', 'lm-pins', lmPins, '#00CED1', 'pin')}
+                    {lmPins.length > 0 && (() => {
+                      const pinsSettings = project?.folderSettings?.[pinsFolderId] || {};
+                      const pinsStyleMode = pinsSettings.styleMode || 'individual';
+                      const pinsColor = pinsSettings.color || '#00CED1';
+                      const isPinsUniform = pinsStyleMode === 'uniform';
+
+                      return (
+                        <div key={pinsFolderId} className="lp-plots-folder">
+                          <div
+                            className={`lp-layer-row ${selectedLayerItemId === pinsFolderId ? 'lp-layer-row--active' : ''}`}
+                            style={{ paddingLeft: 24, cursor: 'pointer', height: 28 }}
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              setSelectedLayerItemId(pinsFolderId);
+                              toggleExpand(pinsFolderId, e);
+                            }}
+                          >
+                            <button
+                              className={`lp-toggle-btn ${!allPinsVisible ? 'lp-toggle-btn--hidden' : ''}`}
+                              style={{ padding: 0, marginRight: 8 }}
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                const newState = !allPinsVisible;
+                                lmPins.forEach(p => {
+                                  const entry = pinManagerRef.current?.pins.get(p.id);
+                                  if (entry) entry.itemVisible = newState;
+                                });
+                                if (pinManagerRef.current) pinManagerRef.current.callbacks.onChange();
+                              }}
+                              title={allPinsVisible ? "Hide all" : "Show all"}
+                            >
+                              {allPinsVisible ? <EyeIcon /> : <EyeOffIcon />}
+                            </button>
+                            <span style={{ fontSize: '12px', fontWeight: 600, color: '#94a3b8', textTransform: 'uppercase', letterSpacing: '0.05em', flexGrow: 1 }}>
+                              Pins ({lmPins.length})
+                            </span>
+
+                            <div className="lp-menu-wrap" style={{ marginRight: 8 }}>
+                              <ColorPickerPopover
+                                color={pinsColor}
+                                onChange={(c) => handleColorChange(pinsFolderId, false, c, lmPins.map(p => ({ ...p, type: 'pin' })))}
+                                styleMode={pinsStyleMode}
+                                onStyleModeChange={(newMode) => handleStyleModeToggle(pinsFolderId, false, newMode, pinsColor, lmPins.map(p => ({ ...p, type: 'pin' })))}
+                                triggerElement={
+                                  isPinsUniform ? null : (
+                                    <button
+                                      className="lp-style-btn"
+                                      title="Style Mode"
+                                    >
+                                      <PaintBrushIcon />
+                                    </button>
+                                  )
+                                }
+                              />
+                            </div>
+
+                            <button
+                              className={`lp-expand-btn ${isPinsExpanded ? 'lp-expand-btn--expanded' : ''}`}
+                              style={{ visibility: 'visible' }}
+                              onClick={(e) => { e.stopPropagation(); toggleExpand(pinsFolderId, e); }}
+                            >
+                              <ChevronIcon />
+                            </button>
+                          </div>
+                          {isPinsExpanded && (
+                            <div className="lp-nested-children" style={{ marginLeft: 16 }}>
+                              {Object.keys(pinsByType).sort().map(t => renderNestedFolder(
+                                LANDMARK_PIN_TYPE_LABELS[t] || t,
+                                `lm-pins-${t}`,
+                                pinsByType[t],
+                                '#00CED1',
+                                'pin',
+                                isPinsUniform
+                              ))}
+                            </div>
+                          )}
+                        </div>
+                      );
+                    })()}
                   </>
                 );
               })()}
