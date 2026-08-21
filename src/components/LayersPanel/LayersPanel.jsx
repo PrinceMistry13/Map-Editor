@@ -447,6 +447,34 @@ export default function LayersPanel({ tick = 0 }) {
     return [...fps, ...polys, ...pins];
   };
 
+  // A floorplan's image can be deleted (bottom edit panel's Delete button)
+  // while its boundary/plots/pins stay. Those leftover items still carry
+  // metadata.floorPlanId, but there's no more `type: 'floorplan'` entry for
+  // that id in `children` (the image is gone). Without this, the whole
+  // folder — and everything still inside it — would vanish from the panel
+  // the moment the image is removed. This synthesizes a placeholder
+  // "floorplan" entry for any such orphaned id so the folder keeps
+  // rendering (imageless) until a new image is added.
+  const deriveFloorPlanFolders = (children, layerId) => {
+    const realFps = children.filter(c => c.type === 'floorplan');
+    const realFpIds = new Set(realFps.map(f => f.id));
+    const orphanFpIds = new Set();
+    children.forEach(c => {
+      if ((c.type === 'polygon' || c.type === 'pin') && c.metadata?.floorPlanId && !realFpIds.has(c.metadata.floorPlanId)) {
+        orphanFpIds.add(c.metadata.floorPlanId);
+      }
+    });
+    const virtualFps = Array.from(orphanFpIds).map(fpId => ({
+      id: fpId,
+      name: project?.folderSettings?.[`folder-${fpId}`]?.name || 'Floor Plan',
+      type: 'floorplan',
+      layerId,
+      visible: true,
+      noImage: true,
+    }));
+    return [...realFps, ...virtualFps];
+  };
+
   const layers = [...(project?.layers || [])].sort((a, b) => (a.order || 0) - (b.order || 0));
 
   // Flatten all children to support shift-click
@@ -462,7 +490,7 @@ export default function LayersPanel({ tick = 0 }) {
   layers.forEach(layer => {
     if (expandedLayers[layer.id]) {
       const children = getLayerChildren(layer.id);
-      const fps = children.filter(c => c.type === 'floorplan');
+      const fps = deriveFloorPlanFolders(children, layer.id);
       const rootPolys = children.filter(c => c.type === 'polygon' && !c.metadata?.floorPlanId);
       const pins = children.filter(c => c.type === 'pin');
 
@@ -937,7 +965,7 @@ export default function LayersPanel({ tick = 0 }) {
               {isExpanded && children.length > 0 && (
                 <div className="lp-children">
                   {(() => {
-                    const fps = children.filter(c => c.type === 'floorplan');
+                    const fps = deriveFloorPlanFolders(children, layer.id);
                     const rootPolys = children.filter(c => c.type === 'polygon' && !c.metadata?.floorPlanId);
                     const rootPins = children.filter(c => c.type === 'pin' && !c.metadata?.floorPlanId);
 
@@ -1061,7 +1089,14 @@ export default function LayersPanel({ tick = 0 }) {
                               </div>
                               {isExpanded && (
                                 <div className="lp-nested-children">
-                                  {renderItemChild(fp, layer, true)}
+                                  {fp.noImage ? (
+                                    <div className="lp-child-item lp-child-item--noimage" style={{ paddingLeft: 24, cursor: 'default' }}>
+                                      <div className="lp-child-icon"><FloorPlanIcon /></div>
+                                      <div className="lp-child-name" style={{ color: 'rgba(255,255,255,0.4)', fontStyle: 'italic' }}>
+                                        No image — use the Floor Plan tool to add one here
+                                      </div>
+                                    </div>
+                                  ) : renderItemChild(fp, layer, true)}
                                   {(() => {
                                     const boundaryPoly = children.find(c => c.type === 'polygon' && c.metadata?.floorPlanId === fp.id && c.category === 'project');
                                     const nestedPlots = children.filter(c => c.type === 'polygon' && c.metadata?.floorPlanId === fp.id && (c.category === 'unit' || c.category === 'pending-unit'));

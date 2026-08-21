@@ -568,19 +568,15 @@ function MapWorkspaceInner() {
           }
         },
         onChange: () => { setTick(t => t + 1); },
-        onDelete: (id) => {
-          if (polygonManagerRef.current) {
-            const state = polygonManagerRef.current.getState();
-            if (state && state.polygons) {
-              state.polygons.forEach(p => {
-                if (p.metadata?.floorPlanId === id) {
-                  polygonManagerRef.current.deletePolygon(p.id, true);
-                }
-              });
-            }
-          }
-          setTick(t => t + 1);
-        },
+        // Deleting a floorplan (from anywhere — the Layers panel's folder
+        // menu, or the bottom edit panel's Delete button) removes ONLY the
+        // image/overlay itself. It intentionally does NOT cascade-delete the
+        // boundary, plots, or pins tied to it: the Layers panel's "Delete
+        // floor plan" already explicitly removes those itself (as part of
+        // its own combined undo step) when that's really what's wanted, and
+        // the bottom panel's Delete is meant to remove just the picture so
+        // a new one can be added back into the same folder.
+        onDelete: () => { setTick(t => t + 1); },
         pushHistory: pushThunk,
         getActiveTool: () => activeToolRef.current,
         // Auto-plot the boundary polygon from the floorplan's own traced
@@ -1657,21 +1653,42 @@ function MapWorkspaceInner() {
     const url = URL.createObjectURL(file);
     const center = floorClickRef.current ?? mapRef.current?.getCenter()?.toJSON() ?? DEFAULT_CENTER;
 
-    const id = nextId("fp");
+    // If the currently OPEN folder in the Layers panel is a floorplan folder
+    // whose image was deleted (its boundary/plots/pins are still there, just
+    // no picture), reuse that SAME floorPlanId instead of creating a new
+    // one — so this image re-attaches to the existing folder/content rather
+    // than starting a brand new, separate folder. Only applies when that
+    // folder is still open and genuinely has no live image right now.
+    const openFpId = openFloorPlanFolderIdRef.current;
+    const reuseExistingFolder = openFpId && !floorPlanManagerRef.current?.overlays.has(openFpId);
+    const id = reuseExistingFolder ? openFpId : nextId("fp");
 
-    let name = "Floor Plan";
-    if (file.name) {
-      name = file.name.replace(/\.[^/.]+$/, "");
+    // Keep the re-added image on the SAME layer as the folder's existing
+    // content, rather than wherever the toolbar's "active layer" happens to
+    // be right now (which may have changed since the image was deleted).
+    let targetLayerId = activeLayerIdRef.current;
+    if (reuseExistingFolder) {
+      const pm = polygonManagerRef.current;
+      const pnm = pinManagerRef.current;
+      const existingPoly = pm ? Array.from(pm.polygons.values()).find(p => p.metadata?.floorPlanId === openFpId) : null;
+      const existingPin = pnm ? Array.from(pnm.pins.values()).find(p => p.metadata?.floorPlanId === openFpId) : null;
+      targetLayerId = existingPoly?.layerId || existingPin?.layerId || targetLayerId;
+    }
+
+    let name = project?.folderSettings?.[`folder-${id}`]?.name;
+    if (!name) {
+      name = "Floor Plan";
+      if (file.name) name = file.name.replace(/\.[^/.]+$/, "");
     }
 
     // Native pixel scale is defaulted to 1 map-meter per pixel.
-    floorPlanManagerRef.current?.addFloorPlan(id, url, center, 1, 0, 1, null, activeLayerIdRef.current, null, name).then(() => {
+    floorPlanManagerRef.current?.addFloorPlan(id, url, center, 1, 0, 1, null, targetLayerId, null, name).then(() => {
       setSelectedFloorPlanId(id);
       setActiveTool(null);
     });
 
     e.target.value = "";
-  }, [floorPlanManagerRef, setSelectedFloorPlanId, setActiveTool]);
+  }, [floorPlanManagerRef, polygonManagerRef, pinManagerRef, setSelectedFloorPlanId, setActiveTool, project]);
 
   // ── Render ──────────────────────────────────────────────────────────────────
   if (!mapsReady) return <LoadingScreen />;

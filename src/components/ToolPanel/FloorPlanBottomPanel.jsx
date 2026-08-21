@@ -57,15 +57,6 @@ export default function FloorPlanBottomPanel() {
     floorPlanManagerRef.current?.updateOpacity(selectedFloorPlanId, val);
   };
 
-  const handleReset = () => {
-    floorPlanManagerRef.current?.reset(selectedFloorPlanId);
-    if (fpEntry) {
-      setOpacity(fpEntry.overlay.opacity);
-      setIsLocked(fpEntry.overlay.isLocked);
-      setIsAspectLocked(fpEntry.overlay.isAspectLocked);
-    }
-  };
-
   const handleToggleLock = () => {
     setIsLocked(!isLocked);
     floorPlanManagerRef.current?.toggleLock(selectedFloorPlanId);
@@ -74,10 +65,6 @@ export default function FloorPlanBottomPanel() {
   const handleToggleAspectLock = () => {
     setIsAspectLocked(!isAspectLocked);
     floorPlanManagerRef.current?.toggleAspectLock(selectedFloorPlanId);
-  };
-
-  const handleSave = () => {
-    floorPlanManagerRef.current?.downloadSave(selectedFloorPlanId);
   };
 
   const handleAutoPlotClick = async () => {
@@ -148,12 +135,10 @@ export default function FloorPlanBottomPanel() {
             </div>
 
             <div className="fp-bp-group fp-bp-actions">
-              <button className="fp-bp-action-btn" onClick={handleReset}>Reset</button>
               <button className="fp-bp-action-btn" onClick={handleToggleLock}>{isLocked ? "Unlock" : "Lock"}</button>
               <button className="fp-bp-action-btn" onClick={handleAutoPlotClick} disabled={!isLocked || isAutoPlotting}>
                 {isAutoPlotting ? 'Plotting...' : 'Auto-Plot Units'}
               </button>
-              <button className="fp-bp-action-btn" onClick={handleSave}>Save</button>
             </div>
           </div>
 
