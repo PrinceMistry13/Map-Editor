@@ -694,7 +694,7 @@ export default function ToolPanel() {
     const isRoad = (activeTool || '').includes('road');
     setBlockedMessage(isRoad ? 'Complete or press Esc to cancel the road' : 'Complete or press Esc to cancel the polygon');
     if (blockedTimerRef.current) clearTimeout(blockedTimerRef.current);
-    blockedTimerRef.current = setTimeout(() => setBlockedMessage(null), 2200);
+    blockedTimerRef.current = setTimeout(() => setBlockedMessage(null), 2000);
   };
 
   const getJSONString = (data) => JSON.stringify(data, null, 2);
@@ -1449,7 +1449,10 @@ export default function ToolPanel() {
             label={label}
             Icon={Icon}
             active={activeLandmarkTool === `lm-${id}`}
-            onClick={() => handleLandmarkTool(`lm-${id}`)}
+            onClick={() => {
+              if (id === 'radius') return;
+              handleLandmarkTool(`lm-${id}`);
+            }}
           />
         ))}
       </div>

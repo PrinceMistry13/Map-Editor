@@ -24,8 +24,6 @@ export default function PropertyPanel({ toolProps, setToolProps }) {
   return (
     <div className="pp-panel" id="pp-panel" aria-label="Tool properties">
       {baseTool === 'pin' && <PinPanel v={toolProps.pin} set={set('pin')} />}
-
-      {baseTool === 'radius' && <RadiusPanel v={toolProps.radius} set={set('radius')} />}
     </div>
   );
 }
@@ -40,44 +38,6 @@ function PinPanel({ v, set }) {
           onChange={(e) => set({ color: e.target.value })} />
       </PpRow>
       <p className="pp-hint">Click map to drop a pin. Click a placed pin to rename, recolor, or drag it.</p>
-    </>
-  );
-}
-
-
-// ─── Radius ───────────────────────────────────────────────────────────────────
-function RadiusPanel({ v, set }) {
-  const add = () => {
-    const lastDist = v.rings[v.rings.length - 1]?.distance ?? 0;
-    set({ rings: [...v.rings, { distance: lastDist + 100 }] });
-  };
-  const remove = (i) => set({ rings: v.rings.filter((_, idx) => idx !== i) });
-  const update = (i, distance) => {
-    const rings = v.rings.map((r, idx) =>
-      idx === i ? { ...r, distance: Math.max(1, distance) } : r
-    );
-    set({ rings });
-  };
-
-  return (
-    <>
-      <PpHeader>Radius Rings</PpHeader>
-      <div className="pp-sublabel">Click map: 1st = center, then each click = ring</div>
-      {v.rings.map((r, i) => (
-        <div key={i} className="pp-ring-row">
-          <input
-            id={`pp-ring-${i}`}
-            type="number"
-            min="1"
-            className="pp-num"
-            value={r.distance}
-            onChange={(e) => update(i, parseInt(e.target.value) || 1)}
-          />
-          <span className="pp-ring-unit">m</span>
-          <button className="pp-ring-del" onClick={() => remove(i)} aria-label="Remove ring">×</button>
-        </div>
-      ))}
-      <button className="pp-add" id="pp-add-ring" onClick={add}>+ Add Ring</button>
     </>
   );
 }

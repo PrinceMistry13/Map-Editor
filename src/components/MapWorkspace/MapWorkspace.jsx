@@ -262,7 +262,6 @@ const DEFAULT_TOOL_PROPS = {
   polygon: { fillColor: "#00CED1", lineColor: "#00CED1", lineWidth: 2 },
   pin: { color: "#00CED1" },
   road: { lineColor: "#FF9800", lineWidth: 3, roadWidth: 6, roadName: "" },
-  radius: { rings: [{ distance: 100 }, { distance: 250 }, { distance: 500 }], ringColor: "#00CED1" },
 };
 
 // ─── MapWorkspaceInner — consumes WorkspaceContext ────────────────────────────
@@ -387,21 +386,16 @@ function MapWorkspaceInner() {
 
   // ── In-progress drawing state ───────────────────────────────────────────────
   const [inProgressPoints, setInProgressPoints] = useState([]);
-  const [radiusCenter, setRadiusCenter] = useState(null);
-  const [radiusRings, setRadiusRings] = useState([]);   // distances[]
 
   // Refs that mirror state so event-listener closures are never stale
   const inProgressRef = useRef([]);
-  const radCenterRef = useRef(null);
-  const radRingsRef = useRef([]);
   const activeToolRef = useRef(null);
   useEffect(() => { activeToolRef.current = activeTool; }, [activeTool]);
 
   // ── Imperative overlay refs ─────────────────────────────────────────────────
-  const featureOverlaysRef = useRef({ polygons: [], pins: [], roads: [], radii: [], floorPlans: [] });
+  const featureOverlaysRef = useRef({ polygons: [], pins: [], roads: [], floorPlans: [] });
   const previewLineRef = useRef(null);   // in-progress polyline
   const previewDotsRef = useRef([]);     // vertex dots
-  const previewCirclesRef = useRef([]);     // radius circles
   const mapListenersRef = useRef([]);
   const polyCleanupRef = useRef(null); // cleanup fn for in-progress polygon draw visuals
   const roadCleanupRef = useRef(null); // cleanup fn for in-progress road draw visuals
@@ -641,15 +635,10 @@ function MapWorkspaceInner() {
   const clearPreview = useCallback(() => {
     if (previewLineRef.current) { previewLineRef.current.setMap(null); previewLineRef.current = null; }
     previewDotsRef.current.forEach((o) => o.setMap(null)); previewDotsRef.current = [];
-    previewCirclesRef.current.forEach((o) => o.setMap(null)); previewCirclesRef.current = [];
   }, []);
   const cancelDrawing = useCallback(() => {
     inProgressRef.current = [];
     setInProgressPoints([]);
-    radCenterRef.current = null;
-    setRadiusCenter(null);
-    radRingsRef.current = [];
-    setRadiusRings([]);
     // Polygon drawing visuals are cleaned up via the effect's return function
   }, []);
 
@@ -687,18 +676,6 @@ function MapWorkspaceInner() {
 
   // ── Commit functions (use refs internally for non-stale access in listeners) ─
 
-  const commitRadius = useCallback((center, rings) => {
-    const p = toolPropsRef.current.radius;
-    commitProject((proj) => ({
-      ...proj,
-      radii: [...proj.radii, {
-        id: nextId("radius"), center,
-        rings: rings.map((d) => ({ distance: d })),
-        ringColor: p.ringColor || "#00CED1",
-      }],
-    }));
-  }, [commitProject]);
-
   const commitRoad = useCallback((points, name, category, layerId) => {
     const p = toolPropsRef.current.road;
     const roadId = nextId("road");
@@ -718,9 +695,7 @@ function MapWorkspaceInner() {
 
   // Keep stable refs to commit fns so drawing-effect closures never go stale
   const commitRoadRef = useRef(commitRoad);
-  const commitRadiusRef = useRef(commitRadius);
   useEffect(() => { commitRoadRef.current = commitRoad; }, [commitRoad]);
-  useEffect(() => { commitRadiusRef.current = commitRadius; }, [commitRadius]);
 
   // ── Road naming/classification modal ────────────────────────────────────────
   // Mirrors the polygon beginNaming / confirmPendingPolygon pattern exactly.
@@ -1031,7 +1006,7 @@ function MapWorkspaceInner() {
 
     map.setOptions({
       draggableCursor: baseTool === "floor-plan" ? "pointer" : (floorPlanMode === 'gcp' ? "crosshair" : "crosshair"),
-      disableDoubleClickZoom: ["polygon", "road", "radius"].includes(baseTool) || floorPlanMode === 'gcp',
+      disableDoubleClickZoom: ["polygon", "road"].includes(baseTool) || floorPlanMode === 'gcp',
     });
 
     const ls = [];
@@ -1394,33 +1369,6 @@ function MapWorkspaceInner() {
       };
     }
 
-    // ── Radius ─────────────────────────────────────────────────────────────
-    else if (baseTool === "radius") {
-      ls.push(map.addListener("click", (e) => {
-        const pt = { lat: e.latLng.lat(), lng: e.latLng.lng() };
-        if (timer) clearTimeout(timer);
-        timer = setTimeout(() => {
-          timer = null;
-          if (!radCenterRef.current) {
-            radCenterRef.current = pt;
-            setRadiusCenter(pt);
-          } else {
-            const d = Math.round(haversine(radCenterRef.current, pt));
-            radRingsRef.current = [...radRingsRef.current, d];
-            setRadiusRings([...radRingsRef.current]);
-          }
-        }, 220);
-      }));
-      ls.push(map.addListener("dblclick", () => {
-        if (timer) { clearTimeout(timer); timer = null; }
-        if (radCenterRef.current && radRingsRef.current.length >= 1) {
-          commitRadiusRef.current(radCenterRef.current, [...radRingsRef.current]);
-        }
-        radCenterRef.current = null; setRadiusCenter(null);
-        radRingsRef.current = []; setRadiusRings([]);
-      }));
-    }
-
     // ── Floor Plan ─────────────────────────────────────────────────────────
     else if (baseTool === "floor-plan") {
       ls.push(map.addListener("click", (e) => {
@@ -1458,7 +1406,7 @@ function MapWorkspaceInner() {
 
     // Clear all previous overlays
     Object.values(featureOverlaysRef.current).forEach((arr) => arr.forEach((o) => o.setMap(null)));
-    featureOverlaysRef.current = { polygons: [], pins: [], roads: [], radii: [], floorPlans: [] };
+    featureOverlaysRef.current = { polygons: [], pins: [], roads: [], floorPlans: [] };
 
     // Polygons are handled natively by PolygonManager now.
 
@@ -1483,32 +1431,6 @@ function MapWorkspaceInner() {
         setRoadPopupPos({ lat: e.latLng.lat(), lng: e.latLng.lng() });
       });
       featureOverlaysRef.current.roads.push(polyline);
-    });
-
-    // Radii
-    project.radii.forEach((radius) => {
-      const color = radius.ringColor || "#00CED1";
-      // Center dot
-      featureOverlaysRef.current.radii.push(
-        new GM.Marker({
-          position: radius.center, map,
-          icon: {
-            path: GM.SymbolPath.CIRCLE, scale: 5,
-            fillColor: color, fillOpacity: 1,
-            strokeColor: "#fff", strokeWeight: 1.5,
-          },
-        })
-      );
-      // Rings
-      radius.rings.forEach(({ distance }) => {
-        featureOverlaysRef.current.radii.push(
-          new GM.Circle({
-            center: radius.center, radius: distance, map,
-            strokeColor: color, strokeWeight: 2, strokeOpacity: 0.8,
-            fillOpacity: 0, clickable: false,
-          })
-        );
-      });
     });
 
     // Floor plans are now managed by FloorPlanManager natively, so no GM.GroundOverlay rendering here.
@@ -1604,33 +1526,8 @@ function MapWorkspaceInner() {
       });
     }
 
-    // Radius preview
-    if (tool === "radius" && radiusCenter) {
-      // Center marker
-      previewCirclesRef.current.push(
-        new GM.Marker({
-          position: radiusCenter, map, clickable: false,
-          icon: {
-            path: GM.SymbolPath.CIRCLE, scale: 6,
-            fillColor: "#00CED1", fillOpacity: 1,
-            strokeColor: "#fff", strokeWeight: 2,
-          },
-        })
-      );
-      // Rings drawn so far
-      radiusRings.forEach((dist) => {
-        previewCirclesRef.current.push(
-          new GM.Circle({
-            center: radiusCenter, radius: dist, map, clickable: false,
-            strokeColor: "#00CED1", strokeWeight: 2, strokeOpacity: 0.8,
-            fillColor: "#00CED1", fillOpacity: 0.05,
-          })
-        );
-      });
-    }
-
     return () => { clearPreview(); };
-  }, [mapReady, inProgressPoints, radiusCenter, radiusRings, clearPreview, activeTool]);
+  }, [mapReady, inProgressPoints, clearPreview, activeTool]);
 
   // ── Handle pin image upload ─────────────────────────────────────────────────
   const handlePinImageFile = useCallback((e, pinId) => {
