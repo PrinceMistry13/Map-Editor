@@ -5,6 +5,7 @@ import SaveProjectDialog from '../Dialogs/SaveProjectDialog';
 import JSZip from 'jszip';
 import { bakeFloorplanImage } from '../../utils/imageBake';
 import { polygonArea } from '../../utils/polygonMetrics';
+import { downloadLegacyExport, buildLegacyExportSource } from '../../utils/legacyExport';
 import './ToolPanel.css';
 
 // ─── Inline SVG icons ─────────────────────────────────────────────────────────
@@ -858,6 +859,14 @@ export default function ToolPanel() {
       console.error("Failed to generate KMZ for bundle", e);
     }
 
+    // 5. Legacy landmarks+project JS (identical output to Export Legacy JS)
+    try {
+      const legacySource = buildLegacyExportSource(data);
+      bundleZip.file(`${fileName}-legacy.js`, legacySource);
+    } catch (e) {
+      console.error("Failed to generate legacy JS for bundle", e);
+    }
+
     try {
       const bundleBlob = await bundleZip.generateAsync({ type: "blob" });
       const url = URL.createObjectURL(bundleBlob);
@@ -1368,6 +1377,12 @@ export default function ToolPanel() {
     setExportMenuOpen(false);
   };
 
+  const handleExportLegacyJS = () => {
+    const data = getExportProject();
+    downloadLegacyExport(data, `legacy-export-${data.id || 'project'}.js`);
+    setExportMenuOpen(false);
+  };
+
 
   // Any tool tap closes the polygon popup / side panel before switching tools.
   // Blocked entirely if a polygon/road draw is mid-progress and the tap targets
@@ -1476,6 +1491,7 @@ export default function ToolPanel() {
               <button className="tp-export-item" onClick={handleExportZIP}>Export as ZIP</button>
               <button className="tp-export-item" onClick={handleExportJSON}>Export as JSON</button>
               <button className="tp-export-item" onClick={handleExportProjectTagJSON}>Export Project Tag JSON</button>
+              <button className="tp-export-item" onClick={handleExportLegacyJS}>Export Legacy JS (landmarks + project)</button>
             </div>
           )}
         </div>
