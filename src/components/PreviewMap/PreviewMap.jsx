@@ -4,6 +4,7 @@ import html2canvas from "html2canvas";
 import PolygonManager from "../../lib/PolygonManager";
 import PinManager from "../../lib/PinManager";
 import FloorPlanManager from "../../lib/FloorPlanManager";
+import { buildMapExportV8 } from "../../utils/mapExportV8";
 
 import "./PreviewMap.css";
 
@@ -548,7 +549,39 @@ function PreviewMap() {
 
   const [isDownloading, setIsDownloading] = useState(false);
   const handleDownload = async () => {
-    // Functionality removed as per request
+    if (isDownloading) return;
+    setIsDownloading(true);
+    try {
+      const pmRaw = polygonManagerRef.current?.getState();
+      const polygonsRoads = pmRaw
+        ? { polygons: pmRaw.polygons || [], roads: pmRaw.roads || [] }
+        : { polygons: projectData.polygons || [], roads: projectData.roads || [] };
+      const pins = pinManagerRef.current?.getState() || projectData.pins || [];
+      const floorPlans = floorPlanManagerRef.current?.getState() || projectData.floorPlans || [];
+
+      const exportData = {
+        pins,
+        polygons: polygonsRoads.polygons,
+        roads: polygonsRoads.roads,
+        floorPlans,
+        layers: projectData.layers || [],
+      };
+
+      const blob = await buildMapExportV8(exportData);
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      a.href = url;
+      a.download = `${projectData.name || "project"}-map-export-v8.zip`;
+      document.body.appendChild(a);
+      a.click();
+      a.remove();
+      URL.revokeObjectURL(url);
+    } catch (e) {
+      console.error("Map export failed", e);
+      alert("Failed to build the map export. Check console for details.");
+    } finally {
+      setIsDownloading(false);
+    }
   };
 
   if (!mapsReady || !projectData) return <LoadingScreen />;
@@ -608,232 +641,234 @@ function PreviewMap() {
             {isDownloading ? "Capturing..." : "Download Map"}
           </button>
         </div>
-        <div className="preview-lp-content">\n          {allLandmarks.length > 0 && (
-          <div className="preview-lp-layer">
-            <div className="preview-lp-layer-row" onClick={(e) => toggleExpand('landmarks', e)}>
-              <button
-                className={`preview-lp-toggle-btn ${layerVisibility['landmarks'] === false ? 'preview-lp-toggle-btn--hidden' : ''}`}
-                onClick={(e) => handleToggleBulkVisibility(e, allLandmarks, 'landmarks')}
-                title={layerVisibility['landmarks'] !== false ? "Hide all" : "Show all"}
-              >
-                {layerVisibility['landmarks'] !== false ? <EyeIcon /> : <EyeOffIcon />}
-              </button>
-              <div className="preview-lp-child-icon" style={{ marginLeft: 4, marginRight: 4 }}>
-                <PolygonIcon />
-              </div>
-              <div className="preview-lp-name-text">Landmarks ({allLandmarks.length})</div>
-              <button
-                className={`preview-lp-expand-btn ${expandedLayers['landmarks'] ? 'preview-lp-expand-btn--expanded' : ''}`}
-                style={{ visibility: 'visible' }}
-              >
-                <ChevronIcon />
-              </button>
-            </div>
-
-            {expandedLayers['landmarks'] && (() => {
-              const lmRoads = landmarkPolys.filter(p => p.type === 'road');
-              const lmPolys = landmarkPolys.filter(p => p.type === 'polygon');
-              const lmPins = landmarkPins;
-
-              const renderFolder = (title, id, items) => {
-                if (items.length === 0) return null;
-                const isExpanded = expandedLayers[id];
-                const allVisible = items.every(p => p.itemVisible !== false && p.visible !== false);
-                return (
-                  <div key={id} style={{ display: 'flex', flexDirection: 'column' }}>
-                    <div className="preview-lp-layer-row" style={{ paddingLeft: 24, height: 28 }} onClick={(e) => toggleExpand(id, e)}>
-                      <button
-                        className={`preview-lp-toggle-btn ${!allVisible ? 'preview-lp-toggle-btn--hidden' : ''}`}
-                        onClick={(e) => handleToggleBulkVisibility(e, items, id)}
-                      >
-                        {allVisible ? <EyeIcon /> : <EyeOffIcon />}
-                      </button>
-                      <div className="preview-lp-name-text" style={{ fontSize: '12px', color: '#94a3b8', textTransform: 'uppercase' }}>
-                        {title} ({items.length})
-                      </div>
-                      <button className={`preview-lp-expand-btn ${isExpanded ? 'preview-lp-expand-btn--expanded' : ''}`}>
-                        <ChevronIcon />
-                      </button>
-                    </div>
-                    {isExpanded && items.map(c => renderItemChild(c, true))}
-                  </div>
-                );
-              };
-
-              const pinsByType = {};
-              lmPins.forEach(p => {
-                const t = p.landmarkType || 'other';
-                if (!pinsByType[t]) pinsByType[t] = [];
-                pinsByType[t].push(p);
-              });
-
-              const pinsFolderId = 'lm-pins';
-              const isPinsExpanded = expandedLayers[pinsFolderId];
-              const allPinsVisible = lmPins.length > 0 && lmPins.every(p => p.itemVisible !== false && p.visible !== false);
-
-              return (
-                <div className="preview-lp-children" style={{ marginLeft: 12 }}>
-                  {renderFolder('Roads', 'lm-roads', lmRoads)}
-                  {renderFolder('Polygons', 'lm-polygons', lmPolys)}
-                  {lmPins.length > 0 && (
-                    <div key={pinsFolderId} style={{ display: 'flex', flexDirection: 'column' }}>
-                      <div className="preview-lp-layer-row" style={{ paddingLeft: 24, height: 28 }} onClick={(e) => toggleExpand(pinsFolderId, e)}>
-                        <button
-                          className={`preview-lp-toggle-btn ${!allPinsVisible ? 'preview-lp-toggle-btn--hidden' : ''}`}
-                          onClick={(e) => handleToggleBulkVisibility(e, lmPins, pinsFolderId)}
-                        >
-                          {allPinsVisible ? <EyeIcon /> : <EyeOffIcon />}
-                        </button>
-                        <div className="preview-lp-name-text" style={{ fontSize: '12px', color: '#94a3b8', textTransform: 'uppercase' }}>
-                          Pins ({lmPins.length})
-                        </div>
-                        <button className={`preview-lp-expand-btn ${isPinsExpanded ? 'preview-lp-expand-btn--expanded' : ''}`}>
-                          <ChevronIcon />
-                        </button>
-                      </div>
-                      {isPinsExpanded && (
-                        <div style={{ marginLeft: 16 }}>
-                          {Object.keys(pinsByType).sort().map(t => renderFolder(
-                            LANDMARK_PIN_TYPE_LABELS[t] || t,
-                            `lm-pins-${t}`,
-                            pinsByType[t]
-                          ))}
-                        </div>
-                      )}
-                    </div>
-                  )}
-                </div>
-              );
-            })()}
-          </div>
-        )}\n          {layers.map(layer => {
-          const isVisible = layerVisibility[layer.id] !== false;
-          const isExpanded = expandedLayers[layer.id];
-          const children = getLayerChildren(layer.id);
-
-          return (
-            <div key={layer.id} className="preview-lp-layer">
-              <div className="preview-lp-layer-row" onClick={(e) => toggleExpand(layer.id, e)}>
+        <div className="preview-lp-content">
+          {allLandmarks.length > 0 && (
+            <div className="preview-lp-layer">
+              <div className="preview-lp-layer-row" onClick={(e) => toggleExpand('landmarks', e)}>
                 <button
-                  className={`preview-lp-toggle-btn ${!isVisible ? 'preview-lp-toggle-btn--hidden' : ''}`}
-                  onClick={(e) => { e.stopPropagation(); toggleLayerVisibility(layer.id); }}
-                  title={isVisible ? "Hide layer" : "Show layer"}
+                  className={`preview-lp-toggle-btn ${layerVisibility['landmarks'] === false ? 'preview-lp-toggle-btn--hidden' : ''}`}
+                  onClick={(e) => handleToggleBulkVisibility(e, allLandmarks, 'landmarks')}
+                  title={layerVisibility['landmarks'] !== false ? "Hide all" : "Show all"}
                 >
-                  {isVisible ? <EyeIcon /> : <EyeOffIcon />}
+                  {layerVisibility['landmarks'] !== false ? <EyeIcon /> : <EyeOffIcon />}
                 </button>
-                <div className="preview-lp-color-swatch-wrap">
-                  <div className="preview-lp-color-swatch" style={{ background: layer.color }}></div>
+                <div className="preview-lp-child-icon" style={{ marginLeft: 4, marginRight: 4 }}>
+                  <PolygonIcon />
                 </div>
-                <div className="preview-lp-name-text">{layer.name}</div>
+                <div className="preview-lp-name-text">Landmarks ({allLandmarks.length})</div>
                 <button
-                  className={`preview-lp-expand-btn ${isExpanded ? 'preview-lp-expand-btn--expanded' : ''}`}
-                  style={{ visibility: children.length > 0 ? 'visible' : 'hidden' }}
+                  className={`preview-lp-expand-btn ${expandedLayers['landmarks'] ? 'preview-lp-expand-btn--expanded' : ''}`}
+                  style={{ visibility: 'visible' }}
                 >
                   <ChevronIcon />
                 </button>
               </div>
 
-              {isExpanded && children.length > 0 && (
-                <div className="preview-lp-children">
-                  {(() => {
-                    const fps = children.filter(c => c.type === 'floorplan');
-                    const rootPolys = children.filter(c => c.type === 'polygon' && !c.metadata?.floorPlanId);
-                    const rootPins = children.filter(c => c.type === 'pin' && !c.metadata?.floorPlanId);
-                    const elements = [];
+              {expandedLayers['landmarks'] && (() => {
+                const lmRoads = landmarkPolys.filter(p => p.type === 'road');
+                const lmPolys = landmarkPolys.filter(p => p.type === 'polygon');
+                const lmPins = landmarkPins;
 
-                    fps.forEach(fp => {
-                      elements.push(
-                        <div key={fp.id} style={{ display: 'flex', flexDirection: 'column' }}>
-                          <div className="preview-lp-layer-row" style={{ paddingLeft: 24, height: 28 }} onClick={(e) => toggleExpand('folder-' + fp.id, e)}>
-                            <button
-                              className={`preview-lp-toggle-btn ${fp.itemVisible === false ? 'preview-lp-toggle-btn--hidden' : ''}`}
-                              onClick={(e) => handleToggleItemVisibility(e, fp)}
-                              title={fp.itemVisible !== false ? "Hide item" : "Show item"}
-                            >
-                              {fp.itemVisible !== false ? <EyeIcon /> : <EyeOffIcon />}
-                            </button>
-                            <div className="preview-lp-child-icon" style={{ marginLeft: 4, marginRight: 4 }}>
-                              <FloorPlanIcon />
-                            </div>
-                            <div className="preview-lp-name-text" style={{ fontSize: '13px', fontWeight: 600, color: '#e2e8f0' }}>
-                              {fp.name || 'Floor Plan'}
-                            </div>
-                            <button className={`preview-lp-expand-btn ${expandedLayers['folder-' + fp.id] ? 'preview-lp-expand-btn--expanded' : ''}`}>
-                              <ChevronIcon />
-                            </button>
-                          </div>
-                          {expandedLayers['folder-' + fp.id] && (() => {
-                            const fpChildren = [];
-
-                            // 1. The floorplan itself (indented)
-                            fpChildren.push(renderItemChild(fp, true));
-
-                            // 2. The boundary polygon
-                            const originalFpId = fp.id.replace('preview-fp-', '');
-                            const boundaryPoly = children.find(c => c.type === 'polygon' && c.metadata?.floorPlanId === originalFpId && c.category === 'project');
-                            if (boundaryPoly) fpChildren.push(renderItemChild(boundaryPoly, true));
-
-                            // 3. The nested plots (unit/pending-unit)
-                            const nestedPlots = children.filter(c => c.type === 'polygon' && c.metadata?.floorPlanId === originalFpId && (c.category === 'unit' || c.category === 'pending-unit'));
-                            if (nestedPlots.length > 0) {
-                              // SORT NESTED PLOTS (Numeric sort)
-                              nestedPlots.sort((a, b) => {
-                                const numA = parseInt(a.name, 10);
-                                const numB = parseInt(b.name, 10);
-                                const isNumA = !isNaN(numA) && numA.toString() === (a.name || '').trim();
-                                const isNumB = !isNaN(numB) && numB.toString() === (b.name || '').trim();
-                                if (isNumA && isNumB) return numA - numB;
-                                if (isNumA && !isNumB) return -1;
-                                if (!isNumA && isNumB) return 1;
-                                return (a.name || '').localeCompare(b.name || '');
-                              });
-
-                              const allPlotsVisible = nestedPlots.every(p => p.itemVisible !== false);
-                              fpChildren.push(
-                                <div key={'plots-' + fp.id} style={{ display: 'flex', flexDirection: 'column' }}>
-                                  <div className="preview-lp-layer-row" style={{ paddingLeft: 40, height: 28 }} onClick={(e) => toggleExpand('plots-' + fp.id, e)}>
-                                    <button
-                                      className={`preview-lp-toggle-btn ${!allPlotsVisible ? 'preview-lp-toggle-btn--hidden' : ''}`}
-                                      onClick={(e) => handleToggleBulkVisibility(e, nestedPlots)}
-                                    >
-                                      {allPlotsVisible ? <EyeIcon /> : <EyeOffIcon />}
-                                    </button>
-                                    <div className="preview-lp-name-text" style={{ fontSize: '12px', color: '#94a3b8', textTransform: 'uppercase' }}>
-                                      Plots ({nestedPlots.length})
-                                    </div>
-                                    <button className={`preview-lp-expand-btn ${expandedLayers['plots-' + fp.id] ? 'preview-lp-expand-btn--expanded' : ''}`}>
-                                      <ChevronIcon />
-                                    </button>
-                                  </div>
-                                  {expandedLayers['plots-' + fp.id] && nestedPlots.map(c => renderItemChild(c, false, true))}
-                                </div>
-                              );
-                            }
-
-                            // 4. Other polygons associated with this floorplan
-                            const otherPolys = children.filter(c => c.type === 'polygon' && c.metadata?.floorPlanId === originalFpId && c.category !== 'unit' && c.category !== 'pending-unit' && c.id !== boundaryPoly?.id);
-                            otherPolys.forEach(c => fpChildren.push(renderItemChild(c, true)));
-
-                            // 5. Nested pins associated with this floorplan
-                            const nestedPins = children.filter(c => c.type === 'pin' && c.metadata?.floorPlanId === originalFpId);
-                            nestedPins.forEach(c => fpChildren.push(renderItemChild(c, true)));
-
-                            return <div className="preview-lp-children">{fpChildren}</div>;
-                          })()}
+                const renderFolder = (title, id, items) => {
+                  if (items.length === 0) return null;
+                  const isExpanded = expandedLayers[id];
+                  const allVisible = items.every(p => p.itemVisible !== false && p.visible !== false);
+                  return (
+                    <div key={id} style={{ display: 'flex', flexDirection: 'column' }}>
+                      <div className="preview-lp-layer-row" style={{ paddingLeft: 24, height: 28 }} onClick={(e) => toggleExpand(id, e)}>
+                        <button
+                          className={`preview-lp-toggle-btn ${!allVisible ? 'preview-lp-toggle-btn--hidden' : ''}`}
+                          onClick={(e) => handleToggleBulkVisibility(e, items, id)}
+                        >
+                          {allVisible ? <EyeIcon /> : <EyeOffIcon />}
+                        </button>
+                        <div className="preview-lp-name-text" style={{ fontSize: '12px', color: '#94a3b8', textTransform: 'uppercase' }}>
+                          {title} ({items.length})
                         </div>
-                      );
-                    });
+                        <button className={`preview-lp-expand-btn ${isExpanded ? 'preview-lp-expand-btn--expanded' : ''}`}>
+                          <ChevronIcon />
+                        </button>
+                      </div>
+                      {isExpanded && items.map(c => renderItemChild(c, true))}
+                    </div>
+                  );
+                };
 
-                    elements.push(...rootPolys.map(c => renderItemChild(c)));
-                    elements.push(...rootPins.map(c => renderItemChild(c)));
+                const pinsByType = {};
+                lmPins.forEach(p => {
+                  const t = p.landmarkType || 'other';
+                  if (!pinsByType[t]) pinsByType[t] = [];
+                  pinsByType[t].push(p);
+                });
 
-                    return elements;
-                  })()}
-                </div>
-              )}
+                const pinsFolderId = 'lm-pins';
+                const isPinsExpanded = expandedLayers[pinsFolderId];
+                const allPinsVisible = lmPins.length > 0 && lmPins.every(p => p.itemVisible !== false && p.visible !== false);
+
+                return (
+                  <div className="preview-lp-children" style={{ marginLeft: 12 }}>
+                    {renderFolder('Roads', 'lm-roads', lmRoads)}
+                    {renderFolder('Polygons', 'lm-polygons', lmPolys)}
+                    {lmPins.length > 0 && (
+                      <div key={pinsFolderId} style={{ display: 'flex', flexDirection: 'column' }}>
+                        <div className="preview-lp-layer-row" style={{ paddingLeft: 24, height: 28 }} onClick={(e) => toggleExpand(pinsFolderId, e)}>
+                          <button
+                            className={`preview-lp-toggle-btn ${!allPinsVisible ? 'preview-lp-toggle-btn--hidden' : ''}`}
+                            onClick={(e) => handleToggleBulkVisibility(e, lmPins, pinsFolderId)}
+                          >
+                            {allPinsVisible ? <EyeIcon /> : <EyeOffIcon />}
+                          </button>
+                          <div className="preview-lp-name-text" style={{ fontSize: '12px', color: '#94a3b8', textTransform: 'uppercase' }}>
+                            Pins ({lmPins.length})
+                          </div>
+                          <button className={`preview-lp-expand-btn ${isPinsExpanded ? 'preview-lp-expand-btn--expanded' : ''}`}>
+                            <ChevronIcon />
+                          </button>
+                        </div>
+                        {isPinsExpanded && (
+                          <div style={{ marginLeft: 16 }}>
+                            {Object.keys(pinsByType).sort().map(t => renderFolder(
+                              LANDMARK_PIN_TYPE_LABELS[t] || t,
+                              `lm-pins-${t}`,
+                              pinsByType[t]
+                            ))}
+                          </div>
+                        )}
+                      </div>
+                    )}
+                  </div>
+                );
+              })()}
             </div>
-          );
-        })}
+          )}
+          {layers.map(layer => {
+            const isVisible = layerVisibility[layer.id] !== false;
+            const isExpanded = expandedLayers[layer.id];
+            const children = getLayerChildren(layer.id);
+
+            return (
+              <div key={layer.id} className="preview-lp-layer">
+                <div className="preview-lp-layer-row" onClick={(e) => toggleExpand(layer.id, e)}>
+                  <button
+                    className={`preview-lp-toggle-btn ${!isVisible ? 'preview-lp-toggle-btn--hidden' : ''}`}
+                    onClick={(e) => { e.stopPropagation(); toggleLayerVisibility(layer.id); }}
+                    title={isVisible ? "Hide layer" : "Show layer"}
+                  >
+                    {isVisible ? <EyeIcon /> : <EyeOffIcon />}
+                  </button>
+                  <div className="preview-lp-color-swatch-wrap">
+                    <div className="preview-lp-color-swatch" style={{ background: layer.color }}></div>
+                  </div>
+                  <div className="preview-lp-name-text">{layer.name}</div>
+                  <button
+                    className={`preview-lp-expand-btn ${isExpanded ? 'preview-lp-expand-btn--expanded' : ''}`}
+                    style={{ visibility: children.length > 0 ? 'visible' : 'hidden' }}
+                  >
+                    <ChevronIcon />
+                  </button>
+                </div>
+
+                {isExpanded && children.length > 0 && (
+                  <div className="preview-lp-children">
+                    {(() => {
+                      const fps = children.filter(c => c.type === 'floorplan');
+                      const rootPolys = children.filter(c => c.type === 'polygon' && !c.metadata?.floorPlanId);
+                      const rootPins = children.filter(c => c.type === 'pin' && !c.metadata?.floorPlanId);
+                      const elements = [];
+
+                      fps.forEach(fp => {
+                        elements.push(
+                          <div key={fp.id} style={{ display: 'flex', flexDirection: 'column' }}>
+                            <div className="preview-lp-layer-row" style={{ paddingLeft: 24, height: 28 }} onClick={(e) => toggleExpand('folder-' + fp.id, e)}>
+                              <button
+                                className={`preview-lp-toggle-btn ${fp.itemVisible === false ? 'preview-lp-toggle-btn--hidden' : ''}`}
+                                onClick={(e) => handleToggleItemVisibility(e, fp)}
+                                title={fp.itemVisible !== false ? "Hide item" : "Show item"}
+                              >
+                                {fp.itemVisible !== false ? <EyeIcon /> : <EyeOffIcon />}
+                              </button>
+                              <div className="preview-lp-child-icon" style={{ marginLeft: 4, marginRight: 4 }}>
+                                <FloorPlanIcon />
+                              </div>
+                              <div className="preview-lp-name-text" style={{ fontSize: '13px', fontWeight: 600, color: '#e2e8f0' }}>
+                                {fp.name || 'Floor Plan'}
+                              </div>
+                              <button className={`preview-lp-expand-btn ${expandedLayers['folder-' + fp.id] ? 'preview-lp-expand-btn--expanded' : ''}`}>
+                                <ChevronIcon />
+                              </button>
+                            </div>
+                            {expandedLayers['folder-' + fp.id] && (() => {
+                              const fpChildren = [];
+
+                              // 1. The floorplan itself (indented)
+                              fpChildren.push(renderItemChild(fp, true));
+
+                              // 2. The boundary polygon
+                              const originalFpId = fp.id.replace('preview-fp-', '');
+                              const boundaryPoly = children.find(c => c.type === 'polygon' && c.metadata?.floorPlanId === originalFpId && c.category === 'project');
+                              if (boundaryPoly) fpChildren.push(renderItemChild(boundaryPoly, true));
+
+                              // 3. The nested plots (unit/pending-unit)
+                              const nestedPlots = children.filter(c => c.type === 'polygon' && c.metadata?.floorPlanId === originalFpId && (c.category === 'unit' || c.category === 'pending-unit'));
+                              if (nestedPlots.length > 0) {
+                                // SORT NESTED PLOTS (Numeric sort)
+                                nestedPlots.sort((a, b) => {
+                                  const numA = parseInt(a.name, 10);
+                                  const numB = parseInt(b.name, 10);
+                                  const isNumA = !isNaN(numA) && numA.toString() === (a.name || '').trim();
+                                  const isNumB = !isNaN(numB) && numB.toString() === (b.name || '').trim();
+                                  if (isNumA && isNumB) return numA - numB;
+                                  if (isNumA && !isNumB) return -1;
+                                  if (!isNumA && isNumB) return 1;
+                                  return (a.name || '').localeCompare(b.name || '');
+                                });
+
+                                const allPlotsVisible = nestedPlots.every(p => p.itemVisible !== false);
+                                fpChildren.push(
+                                  <div key={'plots-' + fp.id} style={{ display: 'flex', flexDirection: 'column' }}>
+                                    <div className="preview-lp-layer-row" style={{ paddingLeft: 40, height: 28 }} onClick={(e) => toggleExpand('plots-' + fp.id, e)}>
+                                      <button
+                                        className={`preview-lp-toggle-btn ${!allPlotsVisible ? 'preview-lp-toggle-btn--hidden' : ''}`}
+                                        onClick={(e) => handleToggleBulkVisibility(e, nestedPlots)}
+                                      >
+                                        {allPlotsVisible ? <EyeIcon /> : <EyeOffIcon />}
+                                      </button>
+                                      <div className="preview-lp-name-text" style={{ fontSize: '12px', color: '#94a3b8', textTransform: 'uppercase' }}>
+                                        Plots ({nestedPlots.length})
+                                      </div>
+                                      <button className={`preview-lp-expand-btn ${expandedLayers['plots-' + fp.id] ? 'preview-lp-expand-btn--expanded' : ''}`}>
+                                        <ChevronIcon />
+                                      </button>
+                                    </div>
+                                    {expandedLayers['plots-' + fp.id] && nestedPlots.map(c => renderItemChild(c, false, true))}
+                                  </div>
+                                );
+                              }
+
+                              // 4. Other polygons associated with this floorplan
+                              const otherPolys = children.filter(c => c.type === 'polygon' && c.metadata?.floorPlanId === originalFpId && c.category !== 'unit' && c.category !== 'pending-unit' && c.id !== boundaryPoly?.id);
+                              otherPolys.forEach(c => fpChildren.push(renderItemChild(c, true)));
+
+                              // 5. Nested pins associated with this floorplan
+                              const nestedPins = children.filter(c => c.type === 'pin' && c.metadata?.floorPlanId === originalFpId);
+                              nestedPins.forEach(c => fpChildren.push(renderItemChild(c, true)));
+
+                              return <div className="preview-lp-children">{fpChildren}</div>;
+                            })()}
+                          </div>
+                        );
+                      });
+
+                      elements.push(...rootPolys.map(c => renderItemChild(c)));
+                      elements.push(...rootPins.map(c => renderItemChild(c)));
+
+                      return elements;
+                    })()}
+                  </div>
+                )}
+              </div>
+            );
+          })}
         </div>
       </div>
       <div className="preview-map-container">
