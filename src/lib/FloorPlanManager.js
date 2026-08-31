@@ -21,18 +21,28 @@ export default class FloorPlanManager {
   }
 
   // Preloads the image to get natural dimensions
-  async addFloorPlan(id, url, center, scale = 1, rotationDeg = 0, opacity = 1, timestamp = null, layerId = 'layer-1', distortedCorners = null, name = 'Floor Plan') {
+  async addFloorPlan(id, url, center, scale = 1, rotationDeg = 0, opacity = 1, timestamp = null, layerId = 'layer-1', distortedCorners = null, name = 'Floor Plan', explicitWidthMeters = null, explicitHeightMeters = null) {
     return new Promise((resolve, reject) => {
       const img = new Image();
       img.crossOrigin = 'anonymous';
       img.onload = () => {
-        let effectiveScale = scale;
-        // If scale is exactly 1 (default for new uploads) and the image is very large, cap width to 60m
-        if (scale === 1 && img.naturalWidth > 60) {
-          effectiveScale = 60 / img.naturalWidth;
+        let widthMeters, heightMeters, effectiveScale;
+        if (explicitWidthMeters && explicitHeightMeters) {
+          // Real-world size is already known (e.g. derived from a KML
+          // overlay's own corner coordinates) — use it directly instead of
+          // deriving it from a possibly-missing scale factor.
+          widthMeters = explicitWidthMeters;
+          heightMeters = explicitHeightMeters;
+          effectiveScale = widthMeters / img.naturalWidth;
+        } else {
+          effectiveScale = scale;
+          // If scale is exactly 1 (default for new uploads) and the image is very large, cap width to 60m
+          if (scale === 1 && img.naturalWidth > 60) {
+            effectiveScale = 60 / img.naturalWidth;
+          }
+          widthMeters = img.naturalWidth * effectiveScale;
+          heightMeters = img.naturalHeight * effectiveScale;
         }
-        const widthMeters = img.naturalWidth * effectiveScale;
-        const heightMeters = img.naturalHeight * effectiveScale;
         // Update the scale in the entry so it saves correctly
         scale = effectiveScale;
 

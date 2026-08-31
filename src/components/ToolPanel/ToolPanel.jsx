@@ -733,12 +733,13 @@ export default function ToolPanel() {
 
     if (data.floorPlans) {
       for (const fp of data.floorPlans) {
-        if (fp.floorplan && fp.floorplan.startsWith('blob:')) {
-          const bytes = await blobUrlToBytes(fp.floorplan);
-          if (bytes) filesFolder.file(`floorplan-${fp.id}.png`, bytes);
-        } else if (fp.floorplan && fp.floorplan.startsWith('data:')) {
+        if (!fp.floorplan) continue;
+        if (fp.floorplan.startsWith('data:')) {
           const base64Data = fp.floorplan.split(',')[1];
           filesFolder.file(`floorplan-${fp.id}.png`, base64Data, { base64: true });
+        } else {
+          const bytes = await blobUrlToBytes(fp.floorplan);
+          if (bytes) filesFolder.file(`floorplan-${fp.id}.png`, bytes);
         }
       }
     }
@@ -749,7 +750,7 @@ export default function ToolPanel() {
           if (pin.imageDataUrl.startsWith('data:')) {
             const base64Data = pin.imageDataUrl.split(',')[1];
             filesFolder.file(`pin-${pin.id}.png`, base64Data, { base64: true });
-          } else if (pin.imageDataUrl.startsWith('blob:')) {
+          } else {
             const bytes = await blobUrlToBytes(pin.imageDataUrl);
             if (bytes) filesFolder.file(`pin-${pin.id}.png`, bytes);
           }
@@ -930,7 +931,13 @@ export default function ToolPanel() {
 
       if (href) {
         if (zip) {
-          const imageFile = zip.file(href);
+          let imageFile = zip.file(href);
+          if (!imageFile) {
+            try { imageFile = zip.file(decodeURIComponent(href)); } catch (e) {}
+          }
+          if (!imageFile) {
+            imageFile = zip.file(href.replace(/\\/g, '/'));
+          }
           if (imageFile) {
             const imgBlob = await imageFile.async('blob');
             blobUrl = URL.createObjectURL(imgBlob);
@@ -996,7 +1003,11 @@ export default function ToolPanel() {
         const s = parseFloat(latLonBox.getElementsByTagName('south')[0]?.textContent || 0);
         const e = parseFloat(latLonBox.getElementsByTagName('east')[0]?.textContent || 0);
         const w = parseFloat(latLonBox.getElementsByTagName('west')[0]?.textContent || 0);
-        rotation = parseFloat(latLonBox.getElementsByTagName('rotation')[0]?.textContent || 0);
+        // KML's <rotation> is counterclockwise-positive (KML spec); this
+        // app's rotation is applied via CSS rotate(), which is clockwise-
+        // positive. Negate on import so a Google Earth-authored rotated
+        // overlay spins the same direction it does in Google Earth.
+        rotation = -parseFloat(latLonBox.getElementsByTagName('rotation')[0]?.textContent || 0);
 
         bounds = { ne: { lat: n, lng: e }, sw: { lat: s, lng: w } };
         corners = { sw: { lat: s, lng: w }, se: { lat: s, lng: e }, ne: { lat: n, lng: e }, nw: { lat: n, lng: w } };
@@ -1013,8 +1024,27 @@ export default function ToolPanel() {
           lat: (bounds.sw.lat + bounds.ne.lat) / 2,
           lng: (bounds.sw.lng + bounds.ne.lng) / 2
         };
+
+        // `scale` is only populated when this KMZ carries this app's own
+        // ExtendedData tag — a real Google Earth KMZ never has it, so scale
+        // stays undefined and addFloorPlan's width/height math produces NaN.
+        // Derive true width/height straight from the parsed corners instead,
+        // so both the rendered image and toggleLock's boundary calc get a
+        // real number regardless of where the KMZ came from.
+        let explicitW = null, explicitH = null;
+        if (corners && window.google?.maps?.geometry?.spherical) {
+          const sph = window.google.maps.geometry.spherical;
+          const toLL = (p) => new window.google.maps.LatLng(p.lat, p.lng);
+          const wTop = sph.computeDistanceBetween(toLL(corners.nw), toLL(corners.ne));
+          const wBot = sph.computeDistanceBetween(toLL(corners.sw), toLL(corners.se));
+          const hLeft = sph.computeDistanceBetween(toLL(corners.nw), toLL(corners.sw));
+          const hRight = sph.computeDistanceBetween(toLL(corners.ne), toLL(corners.se));
+          explicitW = (wTop + wBot) / 2;
+          explicitH = (hLeft + hRight) / 2;
+        }
+
         const fpm = floorPlanManagerRef.current;
-        await fpm.addFloorPlan(id, blobUrl, center, scale, rotation, 1, undefined, activeLayerId, distortedCorners, goName || `Floor Plan ${i + 1}`);
+        await fpm.addFloorPlan(id, blobUrl, center, scale, rotation, 1, undefined, activeLayerId, distortedCorners, goName || `Floor Plan ${i + 1}`, explicitW, explicitH);
         fpm.toggleLock(id); // Triggers boundary reset correctly
       }
     }
@@ -1129,7 +1159,13 @@ export default function ToolPanel() {
             let imageDataUrl = null;
             if (href && wantsCustom && !isStockIcon) {
               if (zip) {
-                const imageFile = zip.file(href);
+                let imageFile = zip.file(href);
+                if (!imageFile) {
+                  try { imageFile = zip.file(decodeURIComponent(href)); } catch (e) {}
+                }
+                if (!imageFile) {
+                  imageFile = zip.file(href.replace(/\\/g, '/'));
+                }
                 if (imageFile) {
                   // Use a base64 data: URL, not a blob: URL. The pin icon is
                   // rendered as an inline <image href="..."> inside an SVG
@@ -1195,7 +1231,8 @@ export default function ToolPanel() {
   };
 
   const handleImportKMZ = (e) => {
-    const file = e.target.files[0];
+    const input = e.target;
+    const file = input.files[0];
     if (!file) return;
 
     const reader = new FileReader();
@@ -1212,6 +1249,7 @@ export default function ToolPanel() {
 
         if (!kmlFile) {
           alert('No KML file found in KMZ.');
+          input.value = null;
           return;
         }
 
@@ -1220,18 +1258,19 @@ export default function ToolPanel() {
         const doc = parser.parseFromString(kmlText, 'text/xml');
 
         await processKMLDoc(doc, zip);
-      } catch (e) {
-        console.error("KMZ import failed", e);
+      } catch (err) {
+        console.error("KMZ import failed", err);
         alert("Failed to import KMZ");
+      } finally {
+        input.value = null;
       }
-
-      e.target.value = null;
     };
     reader.readAsArrayBuffer(file);
   };
 
   const handleImportKML = (e) => {
-    const file = e.target.files[0];
+    const input = e.target;
+    const file = input.files[0];
     if (!file) return;
 
     const reader = new FileReader();
@@ -1242,12 +1281,12 @@ export default function ToolPanel() {
         const doc = parser.parseFromString(kmlText, 'text/xml');
 
         await processKMLDoc(doc, null);
-      } catch (e) {
-        console.error("KML import failed", e);
+      } catch (err) {
+        console.error("KML import failed", err);
         alert("Failed to import KML");
+      } finally {
+        input.value = null;
       }
-
-      e.target.value = null;
     };
     reader.readAsText(file);
   };
