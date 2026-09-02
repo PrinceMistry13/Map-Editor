@@ -4,8 +4,6 @@ import html2canvas from "html2canvas";
 import PolygonManager from "../../lib/PolygonManager";
 import PinManager from "../../lib/PinManager";
 import FloorPlanManager from "../../lib/FloorPlanManager";
-import { buildMapExportV8 } from "../../utils/mapExportV8";
-
 import "./PreviewMap.css";
 
 // ─── Constants ────────────────────────────────────────────────────────────────

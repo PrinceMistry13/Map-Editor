@@ -933,7 +933,7 @@ export default function ToolPanel() {
         if (zip) {
           let imageFile = zip.file(href);
           if (!imageFile) {
-            try { imageFile = zip.file(decodeURIComponent(href)); } catch (e) {}
+            try { imageFile = zip.file(decodeURIComponent(href)); } catch (e) { }
           }
           if (!imageFile) {
             imageFile = zip.file(href.replace(/\\/g, '/'));
@@ -1045,6 +1045,19 @@ export default function ToolPanel() {
 
         const fpm = floorPlanManagerRef.current;
         await fpm.addFloorPlan(id, blobUrl, center, scale, rotation, 1, undefined, activeLayerId, distortedCorners, goName || `Floor Plan ${i + 1}`, explicitW, explicitH);
+
+        if (distortedCorners) {
+          // Imported overlays are created in the workspace's default 'manual'
+          // mode, so draw() renders them as an axis-aligned rectangle instead
+          // of the true warped quad until the user manually opens the bottom
+          // panel and clicks Distort. Force this overlay's own render mode to
+          // 'distort' immediately so it fits its real KML boundary on import,
+          // matching what clicking Distort would produce. Scoped to this one
+          // overlay only — does not touch the global floorPlanMode toggle.
+          const importedEntry = fpm.overlays.get(id);
+          importedEntry?.overlay.update({ mode: 'distort' });
+        }
+
         fpm.toggleLock(id); // Triggers boundary reset correctly
       }
     }
@@ -1161,7 +1174,7 @@ export default function ToolPanel() {
               if (zip) {
                 let imageFile = zip.file(href);
                 if (!imageFile) {
-                  try { imageFile = zip.file(decodeURIComponent(href)); } catch (e) {}
+                  try { imageFile = zip.file(decodeURIComponent(href)); } catch (e) { }
                 }
                 if (!imageFile) {
                   imageFile = zip.file(href.replace(/\\/g, '/'));
