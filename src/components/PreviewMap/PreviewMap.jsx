@@ -1,10 +1,120 @@
 import React, { useState, useEffect, useRef, useCallback } from "react";
 import { GoogleMap, OverlayView } from "@react-google-maps/api";
 import html2canvas from "html2canvas";
+import JSZip from "jszip";
 import PolygonManager from "../../lib/PolygonManager";
 import PinManager from "../../lib/PinManager";
 import FloorPlanManager from "../../lib/FloorPlanManager";
+import { bakeFloorplanImage } from "../../utils/imageBake";
+import { buildStandaloneMainJs, buildStandaloneIndexHtml, getUsedLandmarkIconFiles, getUsedProjectPinFiles } from "../../utils/legacyExport";
+
 import "./PreviewMap.css";
+
+// Reads preview data stored by LayersPanel's Preview button via IndexedDB
+// (sessionStorage's ~5-10MB quota is too small once custom pin/floorplan
+// images are involved).
+function loadPreviewDataFromIDB(pid) {
+  return new Promise((resolve, reject) => {
+    const req = indexedDB.open('mapPreviewDB', 1);
+    req.onupgradeneeded = () => { req.result.createObjectStore('previews'); };
+    req.onsuccess = () => {
+      const db = req.result;
+      const tx = db.transaction('previews', 'readonly');
+      const getReq = tx.objectStore('previews').get(pid);
+      getReq.onsuccess = () => resolve(getReq.result);
+      getReq.onerror = () => reject(getReq.error);
+    };
+    req.onerror = () => reject(req.error);
+  });
+}
+
+// Converts a blob: URL into raw bytes for zipping (data: URLs are handled
+// inline via base64 instead, so this is only needed for blob: sources).
+const blobUrlToBytes = async (url) => {
+  try {
+    const res = await fetch(url);
+    const blob = await res.blob();
+    return await blob.arrayBuffer();
+  } catch (e) {
+    console.warn("Failed to fetch blob", e);
+    return null;
+  }
+};
+
+// Builds the "Download Map" zip: main.js + index.html (standalone Google
+// Maps render engine + data), images/floorplan/ (baked floorplan images)
+// and images/locationsPin/ (any custom-uploaded landmark pin icons).
+// Returns the zip as a Blob, ready to save.
+async function buildMapExportV8(data) {
+  const zip = new JSZip();
+  const floorplanFolder = zip.folder("images/floorplan");
+  const pinFolder = zip.folder("images/locationsPin");
+
+  // Floor plan images — baked to match the exact distorted/rotated
+  // footprint shown on the map.
+  const floorPlans = data.floorPlans || [];
+  for (const fp of floorPlans) {
+    if (!fp.floorplan) continue;
+    try {
+      const img = await new Promise((resolve) => {
+        const el = new Image();
+        el.crossOrigin = "anonymous";
+        el.onload = () => resolve(el);
+        el.onerror = () => resolve(null);
+        el.src = fp.floorplan;
+      });
+      if (img && img.naturalWidth > 0) {
+        const bakedBlob = await bakeFloorplanImage(img, fp);
+        if (bakedBlob) floorplanFolder.file(`floorplan-${fp.id}.png`, bakedBlob);
+      }
+    } catch (e) {
+      console.warn("Failed to bake floorplan image for download", fp.id, e);
+    }
+  }
+
+  // Bundle the fixed landmark icon set (public/landmark-icons/) for only
+  // the pin types actually used in this project — these are the same
+  // real files main.js's pinMap points at, so pins render categorized
+  // by type instead of falling back to Google's default red marker.
+  const usedIcons = getUsedLandmarkIconFiles(data.pins || []);
+  for (const icon of usedIcons) {
+    try {
+      const bytes = await blobUrlToBytes(`/landmark-icons/${icon.fileName}`);
+      if (bytes) pinFolder.file(icon.fileName, bytes);
+    } catch (e) {
+      console.warn("Failed to bundle landmark icon for download", icon.fname, e);
+    }
+  }
+
+  // Custom project pin images (uploaded per floorplan in the editor) —
+  // bundled into images/pin/, referenced by each project's pinUrl in main.js.
+  const projectPinFolder = zip.folder("images/pin");
+  const usedProjectPins = getUsedProjectPinFiles(data.pins || [], data.floorPlans || []);
+  for (const entry of usedProjectPins) {
+    try {
+      const src = entry.pin.imageDataUrl || entry.pin.imageUrl;
+      if (!src) continue;
+      let bytes;
+      if (src.startsWith("data:")) {
+        const base64 = src.split(",")[1];
+        const binary = atob(base64);
+        bytes = new Uint8Array(binary.length);
+        for (let i = 0; i < binary.length; i++) bytes[i] = binary.charCodeAt(i);
+      } else {
+        bytes = await blobUrlToBytes(src);
+      }
+      if (bytes) projectPinFolder.file(entry.fileName, bytes);
+    } catch (e) {
+      console.warn("Failed to bundle project pin image", entry.fpId, e);
+    }
+  }
+
+  const apiKey = import.meta.env.VITE_GOOGLE_MAPS_API_KEY || "";
+  zip.file("main.js", buildStandaloneMainJs(data, { apiKey }));
+  zip.file("index.html", buildStandaloneIndexHtml(data.name || data.id || "Map Export"));
+
+  return await zip.generateAsync({ type: "blob" });
+}
 
 // ─── Constants ────────────────────────────────────────────────────────────────
 const MAP_CONTAINER_STYLE = { width: "100%", height: "100%" };
@@ -194,15 +304,33 @@ function PreviewMap() {
   }, [mapReady, layerVisibility, tick]);
 
   useEffect(() => {
+    const applyData = (parsed) => {
+      setProjectData(parsed);
+      const visibility = {};
+      parsed.layers?.forEach(l => { visibility[l.id] = l.visible !== false; });
+      visibility['landmarks'] = true;
+      setLayerVisibility(visibility);
+    };
+
+    const params = new URLSearchParams(window.location.search);
+    const pid = params.get('pid');
+
+    if (pid) {
+      loadPreviewDataFromIDB(pid).then((parsed) => {
+        if (parsed) applyData(parsed);
+        else alert("No preview data found.");
+      }).catch((e) => {
+        console.error(e);
+        alert("Failed to load preview data.");
+      });
+      return;
+    }
+
+    // Legacy fallback for any stale sessionStorage-based preview links.
     try {
       const dataStr = sessionStorage.getItem('preview_project_data');
       if (dataStr) {
-        const parsed = JSON.parse(dataStr);
-        setProjectData(parsed);
-        const visibility = {};
-        parsed.layers?.forEach(l => { visibility[l.id] = l.visible !== false; });
-        visibility['landmarks'] = true;
-        setLayerVisibility(visibility);
+        applyData(JSON.parse(dataStr));
       } else {
         alert("No preview data found.");
       }
@@ -555,7 +683,58 @@ function PreviewMap() {
         ? { polygons: pmRaw.polygons || [], roads: pmRaw.roads || [] }
         : { polygons: projectData.polygons || [], roads: projectData.roads || [] };
       const pins = pinManagerRef.current?.getState() || projectData.pins || [];
-      const floorPlans = floorPlanManagerRef.current?.getState() || projectData.floorPlans || [];
+      const rawFloorPlans = floorPlanManagerRef.current?.getState() || projectData.floorPlans || [];
+      // bakeFloorplanImage's rigid/rotated branch bakes rotation into the pixels,
+      // sizing the output canvas to the ROTATED bounding box of the image (in
+      // pixel units). But main.js's plain GroundOverlay has no rotation param —
+      // it stretches the baked PNG into whatever bounds we give it. If we hand
+      // it the original UNROTATED fp.bounds, the bigger rotated canvas gets
+      // squeezed into a smaller box, causing the shrink/skew/displacement.
+      // Fix: expand bounds geographically using the same rotated-bbox formula
+      // the baker uses in pixel space, so both agree on the same box.
+      const expandBoundsForRotation = (bounds, rotationDeg) => {
+        if (!bounds || !rotationDeg) return bounds;
+        const rad = (rotationDeg * Math.PI) / 180;
+        const centerLat = (bounds.sw.lat + bounds.ne.lat) / 2;
+        const centerLng = (bounds.sw.lng + bounds.ne.lng) / 2;
+        const metersPerLat = 111320;
+        const metersPerLng = 40075000 * Math.cos((centerLat * Math.PI) / 180) / 360;
+        const halfW = ((bounds.ne.lng - bounds.sw.lng) * metersPerLng) / 2;
+        const halfH = ((bounds.ne.lat - bounds.sw.lat) * metersPerLat) / 2;
+        const corners = [
+          { x: -halfW, y: -halfH }, { x: halfW, y: -halfH },
+          { x: halfW, y: halfH }, { x: -halfW, y: halfH },
+        ].map(p => ({
+          x: p.x * Math.cos(rad) - p.y * Math.sin(rad),
+          y: p.x * Math.sin(rad) + p.y * Math.cos(rad),
+        }));
+        const newHalfW = Math.max(...corners.map(c => Math.abs(c.x)));
+        const newHalfH = Math.max(...corners.map(c => Math.abs(c.y)));
+        return {
+          sw: { lat: centerLat - newHalfH / metersPerLat, lng: centerLng - newHalfW / metersPerLng },
+          ne: { lat: centerLat + newHalfH / metersPerLat, lng: centerLng + newHalfW / metersPerLng },
+        };
+      };
+      // If the floorplan was warped via distortedCorners (nw/ne/se/sw), the baked
+      // image is pre-warped to fill THAT quad's bounding box — not fp.bounds,
+      // which is the stale pre-distortion rectangle. main.js's GroundOverlay is
+      // a plain rectangle stretch, so it must be given the distorted corners'
+      // own bbox, or the image stretches into the wrong footprint entirely.
+      const boundsFromDistortedCorners = (corners) => {
+        const lats = [corners.nw.lat, corners.ne.lat, corners.se.lat, corners.sw.lat];
+        const lngs = [corners.nw.lng, corners.ne.lng, corners.se.lng, corners.sw.lng];
+        return {
+          sw: { lat: Math.min(...lats), lng: Math.min(...lngs) },
+          ne: { lat: Math.max(...lats), lng: Math.max(...lngs) },
+        };
+      };
+      const floorPlans = rawFloorPlans.map(fp => ({
+        ...fp,
+        id: typeof fp.id === 'string' ? fp.id.replace(/^preview-fp-/, '') : fp.id,
+        bounds: fp.distortedCorners
+          ? boundsFromDistortedCorners(fp.distortedCorners)
+          : (fp.bounds ? expandBoundsForRotation(fp.bounds, fp.rotation) : fp.bounds),
+      }));
 
       const exportData = {
         pins,

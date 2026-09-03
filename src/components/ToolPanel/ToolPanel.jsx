@@ -971,6 +971,8 @@ export default function ToolPanel() {
       let corners = null;
       let distortedCorners = null;
       let bounds = null;
+      // True centroid of the 4 corners — only set for the LatLonQuad branch.
+      let quadCentroid = null;
 
       if (latLonQuad) {
         const coordsStr = latLonQuad.getElementsByTagName('coordinates')[0]?.textContent;
@@ -993,9 +995,24 @@ export default function ToolPanel() {
             });
             bounds = { ne: { lat: maxLatQ, lng: maxLngQ }, sw: { lat: minLatQ, lng: minLngQ } };
 
-            if (isDistortedFlag === false) {
-              distortedCorners = null;
-            }
+            // Average of all 4 corners = exact rectangle center at any
+            // rotation angle, unlike the bounding-box midpoint above.
+            quadCentroid = {
+              lat: (pts[0].lat + pts[1].lat + pts[2].lat + pts[3].lat) / 4,
+              lng: (pts[0].lng + pts[1].lng + pts[2].lng + pts[3].lng) / 4
+            };
+
+            // Previously: when isDistorted === false, the literal corners
+            // were thrown away here and a center/rotation/width/height was
+            // re-derived from them instead, re-rendering that as a plain
+            // CSS-rotated rectangle. Google Earth just draws the 4 points
+            // directly and always looks correct — any small mismatch
+            // between that re-derivation and this app's own corner math
+            // only showed up in the map editor. Keeping distortedCorners
+            // set unconditionally makes every gx:LatLonQuad (rotated or
+            // truly warped, from this app or any other tool) render from
+            // its exact 4 corners via the same quad/homography renderer,
+            // so a plain rotated rectangle is reproduced exactly too.
           }
         }
       } else if (latLonBox) {
@@ -1019,8 +1036,9 @@ export default function ToolPanel() {
         const id = 'fp-' + Date.now() + '-' + i;
         if (goName) floorPlanMap[goName] = id;
 
-        // Use addFloorPlan to await image load, then lock
-        const center = {
+        // quadCentroid (exact center) is used when available; LatLonBox
+        // path has no quadCentroid and correctly falls back to the midpoint.
+        const center = quadCentroid || {
           lat: (bounds.sw.lat + bounds.ne.lat) / 2,
           lng: (bounds.sw.lng + bounds.ne.lng) / 2
         };
@@ -1058,7 +1076,15 @@ export default function ToolPanel() {
           importedEntry?.overlay.update({ mode: 'distort' });
         }
 
-        fpm.toggleLock(id); // Triggers boundary reset correctly
+        // Lock directly instead of fpm.toggleLock(id) — toggleLock's onLock
+        // re-traces a boundary from the image's raster pixels (async), which
+        // races with the placemark loop below and can overwrite/duplicate
+        // the KML's own accurate boundary polygon with an approximate one.
+        const importedFpEntry = fpm.overlays.get(id);
+        if (importedFpEntry?.overlay) {
+          importedFpEntry.overlay.update({ isLocked: true });
+        }
+        fpm.callbacks.onChange && fpm.callbacks.onChange();
       }
     }
 

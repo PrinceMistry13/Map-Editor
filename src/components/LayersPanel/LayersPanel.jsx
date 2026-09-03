@@ -93,6 +93,25 @@ const LANDMARK_PIN_TYPE_LABELS = {
   multiplex: 'Multiplex', police: 'Police', textile: 'Textile', other: 'Other',
 };
 
+// IndexedDB replaces sessionStorage for preview data — sessionStorage has a
+// ~5-10MB quota that base64 pin/floorplan images blow past, throwing
+// QuotaExceededError and silently leaving preview_project_data unwritten.
+function savePreviewDataToIDB(data) {
+  const pid = 'preview-' + Date.now();
+  return new Promise((resolve, reject) => {
+    const req = indexedDB.open('mapPreviewDB', 1);
+    req.onupgradeneeded = () => { req.result.createObjectStore('previews'); };
+    req.onsuccess = () => {
+      const db = req.result;
+      const tx = db.transaction('previews', 'readwrite');
+      tx.objectStore('previews').put(data, pid);
+      tx.oncomplete = () => resolve(pid);
+      tx.onerror = () => reject(tx.error);
+    };
+    req.onerror = () => reject(req.error);
+  });
+}
+
 export default function LayersPanel({ tick = 0 }) {
   const {
     project,
@@ -845,10 +864,15 @@ export default function LayersPanel({ tick = 0 }) {
       <div className="lp-header">
         <span className="lp-title">Layers</span>
         <div style={{ display: 'flex', gap: '8px' }}>
-          <button className="lp-add-btn" onClick={() => {
+          <button className="lp-add-btn" onClick={async () => {
             const data = getExportProject();
-            sessionStorage.setItem('preview_project_data', JSON.stringify(data));
-            window.open('/preview', '_blank');
+            try {
+              const pid = await savePreviewDataToIDB(data);
+              window.open(`/preview?pid=${pid}`, '_blank');
+            } catch (e) {
+              console.error('Failed to save preview data', e);
+              alert('Failed to open preview.');
+            }
           }} title="Preview map">
             Preview
           </button>
