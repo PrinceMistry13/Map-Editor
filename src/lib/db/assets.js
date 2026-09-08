@@ -19,9 +19,18 @@ export async function fetchAndHashImage(imageSrc) {
     return { blob, hash };
 }
 
-export async function uploadAssetFromBlob(projectId, blob, type, hash) {
+function sanitizeFolderName(name) {
+    return (name || 'project')
+        .trim()
+        .replace(/[^a-zA-Z0-9-_ ]/g, '')
+        .replace(/\s+/g, '-')
+        .toLowerCase() || 'project';
+}
+
+export async function uploadAssetFromBlob(projectId, blob, type, hash, projectName) {
     const compressed = await compressImage(blob);
-    const filePath = `${projectId}/${type}/${Date.now()}.webp`;
+    const folder = sanitizeFolderName(projectName);
+    const filePath = `${folder}/${type}/${Date.now()}.webp`;
 
     const { error: uploadError } = await supabase.storage
         .from('project-files')

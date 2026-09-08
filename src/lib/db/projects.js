@@ -19,7 +19,7 @@ async function getExistingAssetMap(projectId, table) {
     return map;
 }
 
-async function resolveImageAssets(projectId, items, imageField, assetType, existingMap) {
+async function resolveImageAssets(projectId, items, imageField, assetType, existingMap, projectName) {
     const resolved = [];
     for (const item of items) {
         const src = item[imageField];
@@ -30,7 +30,7 @@ async function resolveImageAssets(projectId, items, imageField, assetType, exist
             if (existing && existing.hash === hash) {
                 assetId = existing.assetId; // unchanged — keep same file, skip upload
             } else {
-                const uploaded = await uploadAssetFromBlob(projectId, blob, assetType, hash);
+                const uploaded = await uploadAssetFromBlob(projectId, blob, assetType, hash, projectName);
                 assetId = uploaded.id;
                 if (existing?.filePath) {
                     await supabase.storage.from('project-files').remove([existing.filePath]);
@@ -58,8 +58,8 @@ export async function saveProjectData(projectId, name, mapped) {
     const existingPinAssets = await getExistingAssetMap(projectId, 'pins');
     const existingFloorplanAssets = await getExistingAssetMap(projectId, 'floorplans');
 
-    const resolvedPins = await resolveImageAssets(projectId, pins, 'imageDataUrl', 'pin_icon', existingPinAssets);
-    const resolvedFloorPlans = await resolveImageAssets(projectId, floorPlans, 'url', 'floorplan_image', existingFloorplanAssets);
+    const resolvedPins = await resolveImageAssets(projectId, pins, 'imageDataUrl', 'pin_icon', existingPinAssets, name);
+    const resolvedFloorPlans = await resolveImageAssets(projectId, floorPlans, 'url', 'floorplan_image', existingFloorplanAssets, name);
 
     await supabase.from('polygons').delete().eq('project_id', projectId);
     await supabase.from('pins').delete().eq('project_id', projectId);
