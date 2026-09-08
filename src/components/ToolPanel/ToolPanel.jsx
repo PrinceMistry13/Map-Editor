@@ -6,6 +6,8 @@ import JSZip from 'jszip';
 import { bakeFloorplanImage } from '../../utils/imageBake';
 import { polygonArea } from '../../utils/polygonMetrics';
 import { downloadLegacyExport, buildLegacyExportSource } from '../../utils/legacyExport';
+import { createProject, saveProjectData, listProjects, loadProject } from '../../lib/db/projects';
+import { mapStateForSave, mapProjectForLoad } from '../../lib/db/mapWorkspaceState';
 import './ToolPanel.css';
 
 // ─── Inline SVG icons ─────────────────────────────────────────────────────────
@@ -669,6 +671,291 @@ function SaveBundleDialog({ onClose, onSave, defaultName }) {
   );
 }
 
+function ProjectSaveDialog({ mode, initialName, existingNames, onCancel, onSave, onSaveAsNew }) {
+  const [name, setName] = useState(initialName || '');
+  const [error, setError] = useState('');
+  const inputRef = React.useRef(null);
+
+  React.useEffect(() => {
+    if (inputRef.current) inputRef.current.select();
+  }, []);
+
+  React.useEffect(() => {
+    const handleEsc = (e) => {
+      if (e.key === 'Escape') {
+        e.stopPropagation();
+        onCancel();
+      }
+    };
+    window.addEventListener('keydown', handleEsc, true);
+    return () => window.removeEventListener('keydown', handleEsc, true);
+  }, [onCancel]);
+
+  const isDuplicate = (val) =>
+    existingNames.some((n) => n.trim().toLowerCase() === val.trim().toLowerCase());
+
+  const handleSaveClick = () => {
+    const val = name.trim();
+    if (!val) return;
+    onSave(val);
+  };
+
+  const handleSaveAsNewClick = () => {
+    const val = name.trim();
+    if (!val) return;
+    if (isDuplicate(val)) {
+      setError('A project with this name already exists. Please use a different name.');
+      return;
+    }
+    onSaveAsNew(val);
+  };
+
+  return createPortal(
+    <div
+      className="dialog-overlay"
+      style={{
+        position: 'fixed',
+        inset: 0,
+        zIndex: 999999,
+        display: 'flex',
+        alignItems: 'center',
+        justifyContent: 'center',
+        backgroundColor: 'rgba(0, 0, 0, 0.6)',
+        fontFamily: "'Inter', system-ui, -apple-system, sans-serif"
+      }}
+    >
+      <div
+        style={{
+          display: 'flex',
+          flexDirection: 'column',
+          gap: '12px',
+          background: '#1A202C',
+          padding: '16px',
+          borderRadius: '10px',
+          boxShadow: '0 20px 25px -5px rgba(0, 0, 0, 0.5), 0 10px 10px -5px rgba(0, 0, 0, 0.3)',
+          border: '1px solid #2D3748',
+          width: '280px',
+          boxSizing: 'border-box'
+        }}
+      >
+        <h3 style={{ margin: 0, fontSize: '15px', fontWeight: '600', color: '#E2E8F0', fontFamily: 'inherit' }}>
+          {mode === 'resave' ? 'Save Project' : 'Project Name'}
+        </h3>
+
+        <input
+          ref={inputRef}
+          type="text"
+          value={name}
+          onChange={(e) => { setName(e.target.value); setError(''); }}
+          onFocus={(e) => {
+            e.target.style.borderColor = '#00E5FF';
+            e.target.style.boxShadow = '0 0 0 1px #00E5FF';
+          }}
+          onBlur={(e) => {
+            e.target.style.borderColor = '#2D3748';
+            e.target.style.boxShadow = 'inset 0 1px 2px rgba(0,0,0,0.2)';
+          }}
+          style={{
+            fontFamily: 'inherit',
+            background: 'rgba(0,0,0,0.2)',
+            border: '1px solid #2D3748',
+            color: '#E2E8F0',
+            fontSize: '14px',
+            fontWeight: '500',
+            outline: 'none',
+            width: '100%',
+            boxSizing: 'border-box',
+            padding: '8px 12px',
+            borderRadius: '6px',
+            boxShadow: 'inset 0 1px 2px rgba(0,0,0,0.2)',
+            transition: 'all 0.2s ease'
+          }}
+          placeholder="Project name..."
+          autoFocus
+          onKeyDown={(e) => {
+            if (e.key === 'Enter') {
+              handleSaveClick();
+            } else if (e.key === 'Escape') {
+              e.stopPropagation();
+              onCancel();
+            }
+          }}
+        />
+
+        {error && (
+          <div style={{ color: '#FC8181', fontSize: '12px', fontFamily: 'inherit' }}>{error}</div>
+        )}
+
+        <div style={{ display: 'flex', flexDirection: 'column', gap: '8px', width: '100%' }}>
+          <div style={{ display: 'flex', gap: '8px', width: '100%' }}>
+            <button
+              style={{
+                fontFamily: 'inherit',
+                flex: 1,
+                background: 'transparent',
+                border: '1px solid #4A5568',
+                color: '#E2E8F0',
+                padding: '8px 0',
+                borderRadius: '6px',
+                cursor: 'pointer',
+                fontSize: '13px',
+                fontWeight: '500',
+                transition: 'all 0.2s ease'
+              }}
+              onMouseEnter={(e) => { e.target.style.background = '#2D3748'; }}
+              onMouseLeave={(e) => { e.target.style.background = 'transparent'; }}
+              onClick={onCancel}
+            >
+              Cancel
+            </button>
+            <button
+              style={{
+                fontFamily: 'inherit',
+                flex: 1,
+                background: '#00E5FF',
+                border: 'none',
+                color: '#0B1120',
+                padding: '8px 0',
+                borderRadius: '6px',
+                cursor: 'pointer',
+                fontSize: '13px',
+                fontWeight: '600',
+                transition: 'opacity 0.2s ease'
+              }}
+              onMouseEnter={(e) => e.target.style.opacity = '0.8'}
+              onMouseLeave={(e) => e.target.style.opacity = '1'}
+              onClick={handleSaveClick}
+            >
+              Save
+            </button>
+          </div>
+
+          {mode === 'resave' && (
+            <button
+              style={{
+                fontFamily: 'inherit',
+                width: '100%',
+                background: 'transparent',
+                border: '1px solid #00E5FF',
+                color: '#00E5FF',
+                padding: '8px 0',
+                borderRadius: '6px',
+                cursor: 'pointer',
+                fontSize: '13px',
+                fontWeight: '600',
+                transition: 'all 0.2s ease'
+              }}
+              onMouseEnter={(e) => { e.target.style.background = 'rgba(0,229,255,0.1)'; }}
+              onMouseLeave={(e) => { e.target.style.background = 'transparent'; }}
+              onClick={handleSaveAsNewClick}
+            >
+              Save As New
+            </button>
+          )}
+        </div>
+      </div>
+    </div>,
+    document.body
+  );
+}
+
+function OpenProjectDialog({ projects, onCancel, onSelect }) {
+  React.useEffect(() => {
+    const handleEsc = (e) => {
+      if (e.key === 'Escape') {
+        e.stopPropagation();
+        onCancel();
+      }
+    };
+    window.addEventListener('keydown', handleEsc, true);
+    return () => window.removeEventListener('keydown', handleEsc, true);
+  }, [onCancel]);
+
+  return createPortal(
+    <div
+      className="dialog-overlay"
+      style={{
+        position: 'fixed',
+        inset: 0,
+        zIndex: 999999,
+        display: 'flex',
+        alignItems: 'center',
+        justifyContent: 'center',
+        backgroundColor: 'rgba(0, 0, 0, 0.6)',
+        fontFamily: "'Inter', system-ui, -apple-system, sans-serif"
+      }}
+    >
+      <div
+        style={{
+          display: 'flex',
+          flexDirection: 'column',
+          gap: '12px',
+          background: '#1A202C',
+          padding: '16px',
+          borderRadius: '10px',
+          boxShadow: '0 20px 25px -5px rgba(0, 0, 0, 0.5), 0 10px 10px -5px rgba(0, 0, 0, 0.3)',
+          border: '1px solid #2D3748',
+          width: '280px',
+          boxSizing: 'border-box'
+        }}
+      >
+        <h3 style={{ margin: 0, fontSize: '15px', fontWeight: '600', color: '#E2E8F0', fontFamily: 'inherit' }}>
+          Open Project
+        </h3>
+
+        <div style={{ display: 'flex', flexDirection: 'column', gap: '6px', overflowY: 'auto', maxHeight: '220px' }}>
+          {projects.length === 0 && (
+            <div style={{ color: '#718096', fontSize: '13px', fontFamily: 'inherit' }}>No saved projects yet.</div>
+          )}
+          {projects.map((p) => (
+            <button
+              key={p.id}
+              style={{
+                fontFamily: 'inherit',
+                textAlign: 'left',
+                background: 'rgba(0,0,0,0.2)',
+                border: '1px solid #2D3748',
+                color: '#E2E8F0',
+                padding: '8px 10px',
+                borderRadius: '6px',
+                cursor: 'pointer',
+                fontSize: '13px',
+                transition: 'border-color 0.2s ease'
+              }}
+              onMouseEnter={(e) => { e.target.style.borderColor = '#00E5FF'; }}
+              onMouseLeave={(e) => { e.target.style.borderColor = '#2D3748'; }}
+              onClick={() => onSelect(p)}
+            >
+              {p.name}
+            </button>
+          ))}
+        </div>
+
+        <button
+          style={{
+            fontFamily: 'inherit',
+            background: 'transparent',
+            border: '1px solid #4A5568',
+            color: '#E2E8F0',
+            padding: '8px 0',
+            borderRadius: '6px',
+            cursor: 'pointer',
+            fontSize: '13px',
+            fontWeight: '500',
+            transition: 'all 0.2s ease'
+          }}
+          onMouseEnter={(e) => { e.target.style.background = '#2D3748'; }}
+          onMouseLeave={(e) => { e.target.style.background = 'transparent'; }}
+          onClick={onCancel}
+        >
+          Cancel
+        </button>
+      </div>
+    </div>,
+    document.body
+  );
+}
+
 export default function ToolPanel() {
   const {
     activeTool,
@@ -676,6 +963,7 @@ export default function ToolPanel() {
     activeLandmarkTool, setActiveLandmarkTool,
     closeSidePopups,
     getExportProject,
+    commitProject,
     floorPlanManagerRef,
     polygonManagerRef,
     pinManagerRef,
@@ -685,6 +973,104 @@ export default function ToolPanel() {
   const [exportMenuOpen, setExportMenuOpen] = useState(false);
   const [saveBundleDialogOpen, setSaveBundleDialogOpen] = useState(false);
   const [defaultZipName, setDefaultZipName] = useState('project');
+
+  // ─── Project save/open ──────────────────────────────────────────────────
+  const [currentProjectId, setCurrentProjectId] = useState(null);
+  const [currentProjectName, setCurrentProjectName] = useState(null);
+  const [projectSaveDialogOpen, setProjectSaveDialogOpen] = useState(false);
+  const [openProjectDialogOpen, setOpenProjectDialogOpen] = useState(false);
+  const [savedProjects, setSavedProjects] = useState([]);
+
+  React.useEffect(() => {
+    listProjects().then(setSavedProjects).catch((err) => console.error('listProjects failed:', err));
+  }, []);
+
+  const handleProjectSaveClick = () => {
+    setProjectSaveDialogOpen(true);
+  };
+
+  const handleProjectSaveNew = async (name) => {
+    try {
+      const raw = getExportProject();
+      const mapped = mapStateForSave(raw);
+      const newId = await createProject(name, mapped.layers);
+      await saveProjectData(newId, name, mapped);
+      setSavedProjects((prev) => [{ id: newId, name }, ...prev]);
+      setCurrentProjectId(newId);
+      setCurrentProjectName(name);
+      setProjectSaveDialogOpen(false);
+    } catch (err) {
+      console.error('Save As New failed:', err);
+      alert('Failed to save project. See console for details.');
+    }
+  };
+
+  const handleProjectSaveOverwrite = async (name) => {
+    try {
+      const raw = getExportProject();
+      const mapped = mapStateForSave(raw);
+      await saveProjectData(currentProjectId, name, mapped);
+      setSavedProjects((prev) => prev.map((p) => (p.id === currentProjectId ? { ...p, name } : p)));
+      setCurrentProjectName(name);
+      setProjectSaveDialogOpen(false);
+    } catch (err) {
+      console.error('Save failed:', err);
+      alert('Failed to save project. See console for details.');
+    }
+  };
+
+  const handleOpenProjectSelect = async (project) => {
+    try {
+      const dbProject = await loadProject(project.id);
+      const data = mapProjectForLoad(dbProject);
+
+      // Close whatever project is currently open before loading the new one —
+      // only one project can be open at a time.
+      floorPlanManagerRef.current?.clearAll();
+
+      // Custom pin icons are rendered as data:image/svg+xml marker icons —
+      // an SVG used as a marker icon runs in a restricted "image" context
+      // and browsers block it from loading external cross-origin resources
+      // referenced inside it. A self-contained base64 data: URL always
+      // works (same reasoning as the KMZ import's own pin image handling),
+      // so inline each custom pin's Storage image before loading it.
+      const resolvedPins = await Promise.all(
+        data.pins.map(async (pin) => {
+          if (pin.styleMode === 'custom' && pin.imageDataUrl && pin.imageDataUrl.startsWith('http')) {
+            try {
+              const res = await fetch(pin.imageDataUrl);
+              const blob = await res.blob();
+              const base64 = await new Promise((resolve, reject) => {
+                const reader = new FileReader();
+                reader.onload = () => resolve(reader.result);
+                reader.onerror = reject;
+                reader.readAsDataURL(blob);
+              });
+              return { ...pin, imageDataUrl: base64 };
+            } catch (err) {
+              console.error('Failed to inline pin image:', pin.id, err);
+              return pin;
+            }
+          }
+          return pin;
+        })
+      );
+
+      polygonManagerRef.current?.loadAll([...data.polygons, ...data.roads]);
+      pinManagerRef.current?.loadAll(resolvedPins);
+      for (const fp of data.floorPlans) {
+        await floorPlanManagerRef.current?.loadFloorPlan(fp.id, fp);
+      }
+      commitProject((proj) => ({ ...proj, layers: data.layers, radii: data.radii }));
+
+      setCurrentProjectId(project.id);
+      setCurrentProjectName(project.name);
+      setOpenProjectDialogOpen(false);
+    } catch (err) {
+      console.error('Open project failed:', err);
+      alert('Failed to open project. See console for details.');
+    }
+  };
   const [blockedMessage, setBlockedMessage] = useState(null);
   const blockedTimerRef = React.useRef(null);
 
@@ -1585,16 +1971,22 @@ export default function ToolPanel() {
         />
 
         <ToolBtn
-          id="import-kmz"
-          label="Import KMZ"
+          id="import-project"
+          label="Import"
           Icon={FolderIcon}
-          onClick={() => document.getElementById('kmz-upload-input')?.click()}
+          onClick={() => document.getElementById('import-upload-input')?.click()}
         />
         <ToolBtn
-          id="import-kml"
-          label="Import KML"
+          id="save-project-db"
+          label="Save Project"
+          Icon={SaveIcon}
+          onClick={handleProjectSaveClick}
+        />
+        <ToolBtn
+          id="open-project-db"
+          label="Open Project"
           Icon={FolderIcon}
-          onClick={() => document.getElementById('kml-upload-input')?.click()}
+          onClick={() => setOpenProjectDialogOpen(true)}
         />
       </div>
 
@@ -1608,19 +2000,39 @@ export default function ToolPanel() {
         />
       )}
 
+      {projectSaveDialogOpen && (
+        <ProjectSaveDialog
+          mode={currentProjectId ? 'resave' : 'new'}
+          initialName={currentProjectName || ''}
+          existingNames={savedProjects.map((p) => p.name)}
+          onCancel={() => setProjectSaveDialogOpen(false)}
+          onSave={(name) => (currentProjectId ? handleProjectSaveOverwrite(name) : handleProjectSaveNew(name))}
+          onSaveAsNew={(name) => handleProjectSaveNew(name)}
+        />
+      )}
+
+      {openProjectDialogOpen && (
+        <OpenProjectDialog
+          projects={savedProjects}
+          onCancel={() => setOpenProjectDialogOpen(false)}
+          onSelect={handleOpenProjectSelect}
+        />
+      )}
+
       <input
         type="file"
-        id="kmz-upload-input"
-        accept=".kmz"
+        id="import-upload-input"
+        accept=".kmz,.kml"
         style={{ display: 'none' }}
-        onChange={handleImportKMZ}
-      />
-      <input
-        type="file"
-        id="kml-upload-input"
-        accept=".kml"
-        style={{ display: 'none' }}
-        onChange={handleImportKML}
+        onChange={(e) => {
+          const file = e.target.files?.[0];
+          if (!file) return;
+          if (file.name.toLowerCase().endsWith('.kmz')) {
+            handleImportKMZ(e);
+          } else if (file.name.toLowerCase().endsWith('.kml')) {
+            handleImportKML(e);
+          }
+        }}
       />
     </div>
   );

@@ -66,14 +66,30 @@ export default class FloorPlanManager {
   }
 
   loadFloorPlan(id, data) {
-    const center = {
+    // Pass the raw saved center/widthMeters/heightMeters straight through —
+    // these are the exact fields draw() uses to position the overlay, so
+    // this is a pure pass-through with zero geo-math/reconstruction risk,
+    // unlike deriving them from corners (which must match draw()'s own
+    // rotation-direction convention to be pixel-accurate).
+    const center = data.center || {
       lat: (data.bounds.sw.lat + data.bounds.ne.lat) / 2,
       lng: (data.bounds.sw.lng + data.bounds.ne.lng) / 2
     };
-    this.addFloorPlan(id, data.floorplan, center, data.scale, data.rotation, data.opacity, data.timestamp, data.layerId || 'layer-1', data.distortedCorners || null, data.name || 'Floor Plan').then(() => {
-      if (data.visible === false) {
-        const entry = this.overlays.get(id);
-        if (entry) entry.itemVisible = false;
+    const explicitW = data.widthMeters || null;
+    const explicitH = data.heightMeters || null;
+
+    return this.addFloorPlan(id, data.floorplan, center, data.scale, data.rotation, data.opacity, data.timestamp, data.layerId || 'layer-1', data.distortedCorners || null, data.name || 'Floor Plan', explicitW, explicitH).then(() => {
+      const entry = this.overlays.get(id);
+      if (entry) {
+        if (data.visible === false) entry.itemVisible = false;
+
+        // Restore saved mode/lock directly (not via toggleLock, which
+        // async re-traces a boundary and can race — same reasoning as
+        // the KMZ import's own lock-restore path).
+        const updates = {};
+        if (data.mode) updates.mode = data.mode;
+        if (data.isLocked) updates.isLocked = data.isLocked;
+        if (Object.keys(updates).length) entry.overlay.update(updates);
       }
     });
   }
@@ -389,7 +405,15 @@ export default class FloorPlanManager {
         opacity: entry.overlay.opacity,
         layerId: entry.layerId || 'layer-1',
         timestamp: entry.timestamp || new Date().toISOString(),
-        visible: entry.itemVisible !== false
+        visible: entry.itemVisible !== false,
+        mode: entry.overlay.mode,
+        isLocked: entry.overlay.isLocked,
+        // Raw internal placement fields — exactly what draw() uses. Saved
+        // directly so reload is a pure pass-through with zero geo-math,
+        // instead of error-prone reconstruction from corners/bounds.
+        center: entry.overlay.center,
+        widthMeters: entry.overlay.widthMeters,
+        heightMeters: entry.overlay.heightMeters
       };
     });
   }
@@ -479,6 +503,13 @@ export default class FloorPlanManager {
     this.overlays.delete(id);
     if (this.selectedId === id) this.selectedId = null;
     this.callbacks.onDelete && this.callbacks.onDelete(id);
+    this.callbacks.onChange && this.callbacks.onChange();
+  }
+
+  clearAll() {
+    this.overlays.forEach((entry) => entry.overlay.setMap(null));
+    this.overlays.clear();
+    this.selectedId = null;
     this.callbacks.onChange && this.callbacks.onChange();
   }
 
