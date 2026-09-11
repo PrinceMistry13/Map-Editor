@@ -1,0 +1,36 @@
+name: Deploy
+on:
+  push:
+    branches: [main]
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Deploy to VPS
+        uses: appleboy/ssh-action@v1.0.3
+        with:
+          host: ${{ secrets.VPS_HOST }}
+          username: ${{ secrets.VPS_USER }}
+          key: ${{ secrets.VPS_SSH_KEY }}
+          script: |
+            cd /opt/apps/mapeditor
+            git pull origin main
+            npm install
+            npm run build
+            # static site — nginx serves the dist folder directly, no restart needed
+
+      - name: Email on failure
+        if: failure()
+        uses: dawidd6/action-send-mail@v3
+        with:
+          server_address: smtp.gmail.com
+          server_port: 465
+          username: ${{ secrets.EMAIL_USERNAME }}
+          password: ${{ secrets.EMAIL_PASSWORD }}
+          subject: "Deploy failed: ${{ github.repository }}"
+          to: ${{ secrets.EMAIL_USERNAME }}
+          from: GitHub Actions
+          body: |
+            Deployment of ${{ github.repository }} failed on commit ${{ github.sha }}.
+            See the run for details: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
