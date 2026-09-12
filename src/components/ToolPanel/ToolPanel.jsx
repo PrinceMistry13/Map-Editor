@@ -1064,8 +1064,46 @@ export default function ToolPanel() {
       }
       commitProject((proj) => ({ ...proj, layers: data.layers, radii: data.radii }));
 
+      // Pan/zoom the map to wherever this project actually is.
+      const map = polygonManagerRef.current?.map || floorPlanManagerRef.current?.map;
+      if (map && window.google?.maps) {
+        const bounds = new window.google.maps.LatLngBounds();
+        let hasPoint = false;
+        // Some stored points can be malformed (e.g. leftover from a save
+        // that failed partway) — validate before extending so one bad
+        // point doesn't crash the whole "open project" action.
+        const safeExtend = (pt) => {
+          if (pt && Number.isFinite(pt.lat) && Number.isFinite(pt.lng)) {
+            bounds.extend(pt);
+            hasPoint = true;
+          }
+        };
+        [...data.polygons, ...data.roads].forEach((p) => {
+          (p.points || []).forEach(safeExtend);
+        });
+        resolvedPins.forEach((p) => safeExtend(p.position));
+        data.floorPlans.forEach((fp) => {
+          // distortedCorners/corners are the true extent when rotated/warped —
+          // fp.bounds alone can under-cover a rotated overlay's visible area.
+          const cornerSet = fp.distortedCorners || fp.corners;
+          if (cornerSet) {
+            Object.values(cornerSet).forEach(safeExtend);
+          } else if (fp.bounds) {
+            safeExtend(fp.bounds.ne);
+            safeExtend(fp.bounds.sw);
+          }
+        });
+        data.radii.forEach((r) => safeExtend(r.center));
+        if (hasPoint) {
+          map.fitBounds(bounds, 80); // 80px padding on all sides — avoids edge-to-edge zoom
+          window.google.maps.event.addListenerOnce(map, 'bounds_changed', () => {
+            if (map.getZoom() > 18) map.setZoom(18); // cap so a single small item doesn't zoom in too tight
+          });
+        }
+      }
+
       setCurrentProjectId(project.id);
-      setCurrentProjectName(project.name);
+      setCurrentProjectName(dbProject.name);
       setOpenProjectDialogOpen(false);
     } catch (err) {
       console.error('Open project failed:', err);
