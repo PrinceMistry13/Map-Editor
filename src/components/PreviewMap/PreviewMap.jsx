@@ -7,6 +7,7 @@ import PinManager from "../../lib/PinManager";
 import FloorPlanManager from "../../lib/FloorPlanManager";
 import { bakeFloorplanImage } from "../../utils/imageBake";
 import { buildStandaloneMainJs, buildStandaloneIndexHtml, getUsedLandmarkIconFiles, getUsedProjectPinFiles } from "../../utils/legacyExport";
+import { floorplanFileSlug } from "../../utils/floorplanSlug";
 
 import "./PreviewMap.css";
 
@@ -65,7 +66,7 @@ async function buildMapExportV8(data) {
       });
       if (img && img.naturalWidth > 0) {
         const bakedBlob = await bakeFloorplanImage(img, fp);
-        if (bakedBlob) floorplanFolder.file(`floorplan-${fp.id}.png`, bakedBlob);
+        if (bakedBlob) floorplanFolder.file(`${floorplanFileSlug(fp)}.png`, bakedBlob);
       }
     } catch (e) {
       console.warn("Failed to bake floorplan image for download", fp.id, e);

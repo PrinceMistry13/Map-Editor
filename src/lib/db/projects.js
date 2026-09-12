@@ -1,5 +1,16 @@
 import { supabase } from '../supabaseClient';
-import { fetchAndHashImage, uploadAssetFromBlob } from './assets';
+import { fetchAndHashImage, uploadAssetFromBlob, expectedFloorplanFileName, hashBlob } from './assets';
+import { bakeFloorplanImage } from '../../utils/imageBake';
+
+function loadImageElement(src) {
+    return new Promise((resolve, reject) => {
+        const img = new Image();
+        img.crossOrigin = 'anonymous';
+        img.onload = () => resolve(img);
+        img.onerror = reject;
+        img.src = src;
+    });
+}
 
 async function getExistingAssetMap(projectId, table) {
     const { data } = await supabase
@@ -25,12 +36,37 @@ async function resolveImageAssets(projectId, items, imageField, assetType, exist
         const src = item[imageField];
         let assetId = null;
         if (src) {
-            const { blob, hash } = await fetchAndHashImage(src);
-            const existing = existingMap[item.feature_id];
-            if (existing && existing.hash === hash) {
-                assetId = existing.assetId; // unchanged — keep same file, skip upload
+            let blob, hash;
+            if (assetType === 'floorplan_image') {
+                // Bake distortion/rotation into pixels before storing — DB
+                // asset must match what's shown in the editor, not the raw upload.
+                // item is the DB-shaped row (snake_case); bakeFloorplanImage
+                // expects the in-app camelCase shape — adapt here.
+                const bakeInput = {
+                    distortedCorners: item.distorted_corners,
+                    rotation: item.rotation_deg,
+                    opacity: item.opacity
+                };
+                const img = await loadImageElement(src);
+                const baked = await bakeFloorplanImage(img, bakeInput);
+                if (baked) {
+                    blob = baked;
+                    hash = await hashBlob(baked); // hash the baked output, so distortion-only edits still trigger re-upload
+                } else {
+                    ({ blob, hash } = await fetchAndHashImage(src)); // bake failed (e.g. tainted canvas) — fall back to raw
+                }
             } else {
-                const uploaded = await uploadAssetFromBlob(projectId, blob, assetType, hash, projectName);
+                ({ blob, hash } = await fetchAndHashImage(src));
+            }
+            const existing = existingMap[item.feature_id];
+            const currentFileName = existing?.filePath?.split('/').pop();
+            const needsRename = assetType === 'floorplan_image'
+                && existing
+                && currentFileName !== expectedFloorplanFileName(item.name, hash);
+            if (existing && existing.hash === hash && !needsRename) {
+                assetId = existing.assetId; // unchanged, correctly named — skip upload
+            } else {
+                const uploaded = await uploadAssetFromBlob(projectId, blob, assetType, hash, projectName, item.name);
                 assetId = uploaded.id;
                 if (existing?.filePath) {
                     await supabase.storage.from('project-files').remove([existing.filePath]);

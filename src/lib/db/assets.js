@@ -6,7 +6,7 @@ async function resolveToBlob(imageSrc) {
     return await res.blob();
 }
 
-async function hashBlob(blob) {
+export async function hashBlob(blob) {
     const buf = await blob.arrayBuffer();
     const digest = await crypto.subtle.digest('SHA-256', buf);
     return Array.from(new Uint8Array(digest)).map((b) => b.toString(16).padStart(2, '0')).join('');
@@ -27,14 +27,27 @@ function sanitizeFolderName(name) {
         .toLowerCase() || 'project';
 }
 
-export async function uploadAssetFromBlob(projectId, blob, type, hash, projectName) {
+function sanitizeFileName(name) {
+    return (name || '').trim().replace(/[\\/:*?"<>|]/g, '');
+}
+
+// floorplan images: named after the floorplan, with a short content-hash
+// suffix so two floorplans with the same name never collide/overwrite.
+export function expectedFloorplanFileName(assetName, hash) {
+    return `${sanitizeFileName(assetName || 'Floor Plan')}-floorplan-${hash.slice(0, 8)}.webp`;
+}
+
+export async function uploadAssetFromBlob(projectId, blob, type, hash, projectName, assetName) {
     const compressed = await compressImage(blob);
     const folder = sanitizeFolderName(projectName);
-    const filePath = `${folder}/${type}/${Date.now()}.webp`;
+    const fileName = type === 'floorplan_image' && assetName
+        ? expectedFloorplanFileName(assetName, hash)
+        : `${Date.now()}.webp`;
+    const filePath = `${folder}/${type}/${fileName}`;
 
     const { error: uploadError } = await supabase.storage
         .from('project-files')
-        .upload(filePath, compressed, { contentType: 'image/webp' });
+        .upload(filePath, compressed, { contentType: 'image/webp', upsert: true });
     if (uploadError) throw uploadError;
 
     const { data: urlData } = supabase.storage.from('project-files').getPublicUrl(filePath);

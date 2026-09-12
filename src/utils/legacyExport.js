@@ -12,6 +12,7 @@
 // can keep the "// Plot N" inline comments the template relies on.
 
 import { polygonArea } from './polygonMetrics';
+import { floorplanFileSlug } from './floorplanSlug';
 
 // Internal landmarkType key (as stored on pins) -> display `fname` used by
 // the legacy template's `locations`/pinMap. Edit this table if your pin
@@ -759,7 +760,7 @@ export function buildStandaloneMainJs(data, opts = {}) {
             const pinUrl = (pin && (pin.imageDataUrl || pin.imageUrl)) ? `images/pin/pin-${fp.id}.png` : '';
             return buildProjectSource(
                 fp, polygons, i, floorPlans.length,
-                fp.floorplan ? `images/floorplan/floorplan-${fp.id}.png` : '',
+                fp.floorplan ? `images/floorplan/${floorplanFileSlug(fp)}.png` : '',
                 pin, pinUrl
             );
         })

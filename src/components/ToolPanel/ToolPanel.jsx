@@ -7,6 +7,7 @@ import { bakeFloorplanImage } from '../../utils/imageBake';
 import { polygonArea } from '../../utils/polygonMetrics';
 import { downloadLegacyExport, buildLegacyExportSource } from '../../utils/legacyExport';
 import { createProject, saveProjectData, listProjects, loadProject } from '../../lib/db/projects';
+import { floorplanFileSlug } from '../../utils/floorplanSlug';
 import { mapStateForSave, mapProjectForLoad } from '../../lib/db/mapWorkspaceState';
 import './ToolPanel.css';
 
@@ -394,8 +395,8 @@ const generateKMLString = (data, exportMode = 'kml') => {
 ${sortedPlotItems.map(p => p.str).join('')}
     </Folder>` : '';
       let href = fp.floorplan;
-      if (exportMode === 'kmz') href = `files/floorplan-${fp.id}.png`;
-      else if (exportMode === 'zip') href = `floorplan-${fp.id}.png`;
+      if (exportMode === 'kmz') href = `files/${floorplanFileSlug(fp)}.png`;
+      else if (exportMode === 'zip') href = `${floorplanFileSlug(fp)}.png`;
 
       const isDistorted = !!fp.distortedCorners;
       let goStr = '';
@@ -1122,10 +1123,10 @@ export default function ToolPanel() {
         if (!fp.floorplan) continue;
         if (fp.floorplan.startsWith('data:')) {
           const base64Data = fp.floorplan.split(',')[1];
-          filesFolder.file(`floorplan-${fp.id}.png`, base64Data, { base64: true });
+          filesFolder.file(`${floorplanFileSlug(fp)}.png`, base64Data, { base64: true });
         } else {
           const bytes = await blobUrlToBytes(fp.floorplan);
-          if (bytes) filesFolder.file(`floorplan-${fp.id}.png`, bytes);
+          if (bytes) filesFolder.file(`${floorplanFileSlug(fp)}.png`, bytes);
         }
       }
     }
@@ -1191,7 +1192,7 @@ export default function ToolPanel() {
         if (img && img.naturalWidth > 0) {
           const bakedBlob = await bakeFloorplanImage(img, fp);
           if (bakedBlob) {
-            zip.file(`floorplan-${fp.id}.png`, bakedBlob);
+            zip.file(`${floorplanFileSlug(fp)}.png`, bakedBlob);
           }
         }
       }

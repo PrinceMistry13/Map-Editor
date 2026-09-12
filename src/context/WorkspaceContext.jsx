@@ -210,12 +210,20 @@ export function WorkspaceProvider({ children }) {
   // project — save, export, project switch — must read through this.
   const getExportProject = useCallback(() => {
     const polyState = polygonManagerRef.current?.getState() || { polygons: [], roads: [] };
+    const rawFloorPlans = floorPlanManagerRef.current?.getState() ?? [];
+    // Layers Panel shows folderSettings[folder-<id>].name over fp.name when
+    // set (folder-level rename) — mirror that here so every export (KML,
+    // KMZ, ZIP, JSON) and derived filenames match what's actually displayed.
+    const floorPlans = rawFloorPlans.map((fp) => {
+      const folderName = project?.folderSettings?.[`folder-${fp.id}`]?.name;
+      return folderName ? { ...fp, name: folderName } : fp;
+    });
 
     return {
       ...project,
       ...polyState,
       pins: pinManagerRef.current?.getState() ?? [],
-      floorPlans: floorPlanManagerRef.current?.getState() ?? [],
+      floorPlans,
     };
   }, [project]);
 
