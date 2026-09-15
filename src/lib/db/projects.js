@@ -1,16 +1,5 @@
 import { supabase } from '../supabaseClient';
-import { fetchAndHashImage, uploadAssetFromBlob, expectedFloorplanFileName, hashBlob } from './assets';
-import { bakeFloorplanImage } from '../../utils/imageBake';
-
-function loadImageElement(src) {
-    return new Promise((resolve, reject) => {
-        const img = new Image();
-        img.crossOrigin = 'anonymous';
-        img.onload = () => resolve(img);
-        img.onerror = reject;
-        img.src = src;
-    });
-}
+import { fetchAndHashImage, uploadAssetFromBlob, expectedFloorplanFileName } from './assets';
 
 async function getExistingAssetMap(projectId, table) {
     const { data } = await supabase
@@ -36,28 +25,13 @@ async function resolveImageAssets(projectId, items, imageField, assetType, exist
         const src = item[imageField];
         let assetId = null;
         if (src) {
-            let blob, hash;
-            if (assetType === 'floorplan_image') {
-                // Bake distortion/rotation into pixels before storing — DB
-                // asset must match what's shown in the editor, not the raw upload.
-                // item is the DB-shaped row (snake_case); bakeFloorplanImage
-                // expects the in-app camelCase shape — adapt here.
-                const bakeInput = {
-                    distortedCorners: item.distorted_corners,
-                    rotation: item.rotation_deg,
-                    opacity: item.opacity
-                };
-                const img = await loadImageElement(src);
-                const baked = await bakeFloorplanImage(img, bakeInput);
-                if (baked) {
-                    blob = baked;
-                    hash = await hashBlob(baked); // hash the baked output, so distortion-only edits still trigger re-upload
-                } else {
-                    ({ blob, hash } = await fetchAndHashImage(src)); // bake failed (e.g. tainted canvas) — fall back to raw
-                }
-            } else {
-                ({ blob, hash } = await fetchAndHashImage(src));
-            }
+            // Store the raw source image, not a distortion/rotation-baked copy.
+            // The live editor (and any other consumer) always renders a
+            // floorplan as raw pixels + distorted_corners/rotation_deg
+            // metadata applied on top — baking the warp into the stored
+            // pixels here would make that metadata get applied a second
+            // time on reload, double-warping the image.
+            const { blob, hash } = await fetchAndHashImage(src);
             const existing = existingMap[item.feature_id];
             const currentFileName = existing?.filePath?.split('/').pop();
             const needsRename = assetType === 'floorplan_image'
@@ -86,10 +60,20 @@ export async function createProject(name, layers) {
     return data.id;
 }
 
+async function replaceTableRows(table, projectId, rows) {
+    const { error: delError } = await supabase.from(table).delete().eq('project_id', projectId);
+    if (delError) throw new Error(`${table} delete failed: ` + delError.message);
+    if (rows.length) {
+        const { error: insError } = await supabase.from(table).insert(rows.map((r) => ({ ...r, project_id: projectId })));
+        if (insError) throw new Error(`${table} insert failed: ` + insError.message);
+    }
+}
+
 export async function saveProjectData(projectId, name, mapped) {
     const { layers, polygons, roads, pins, floorPlans, radii } = mapped;
 
-    await supabase.from('projects').update({ name, layers }).eq('id', projectId);
+    const { error: metaError } = await supabase.from('projects').update({ name, layers }).eq('id', projectId);
+    if (metaError) throw new Error('project metadata update failed: ' + metaError.message);
 
     const existingPinAssets = await getExistingAssetMap(projectId, 'pins');
     const existingFloorplanAssets = await getExistingAssetMap(projectId, 'floorplans');
@@ -97,28 +81,13 @@ export async function saveProjectData(projectId, name, mapped) {
     const resolvedPins = await resolveImageAssets(projectId, pins, 'imageDataUrl', 'pin_icon', existingPinAssets, name);
     const resolvedFloorPlans = await resolveImageAssets(projectId, floorPlans, 'url', 'floorplan_image', existingFloorplanAssets, name);
 
-    await supabase.from('polygons').delete().eq('project_id', projectId);
-    await supabase.from('pins').delete().eq('project_id', projectId);
-    await supabase.from('floorplans').delete().eq('project_id', projectId);
-    await supabase.from('radii').delete().eq('project_id', projectId);
-
-    const allPolys = [...polygons, ...roads];
-    if (allPolys.length) {
-        const { error: e1 } = await supabase.from('polygons').insert(allPolys.map((p) => ({ ...p, project_id: projectId })));
-        if (e1) throw new Error('polygons insert failed: ' + e1.message);
-    }
-    if (resolvedPins.length) {
-        const { error: e2 } = await supabase.from('pins').insert(resolvedPins.map((p) => ({ ...p, project_id: projectId })));
-        if (e2) throw new Error('pins insert failed: ' + e2.message);
-    }
-    if (resolvedFloorPlans.length) {
-        const { error: e3 } = await supabase.from('floorplans').insert(resolvedFloorPlans.map((f) => ({ ...f, project_id: projectId })));
-        if (e3) throw new Error('floorplans insert failed: ' + e3.message);
-    }
-    if (radii.length) {
-        const { error: e4 } = await supabase.from('radii').insert(radii.map((r) => ({ ...r, project_id: projectId })));
-        if (e4) throw new Error('radii insert failed: ' + e4.message);
-    }
+    // Each table's delete+insert is paired so a failure on one table only
+    // empties that table, rather than wiping every table up front (as a
+    // single delete-all-then-insert-all pass would) before any failure.
+    await replaceTableRows('polygons', projectId, [...polygons, ...roads]);
+    await replaceTableRows('pins', projectId, resolvedPins);
+    await replaceTableRows('floorplans', projectId, resolvedFloorPlans);
+    await replaceTableRows('radii', projectId, radii);
 }
 
 export async function listProjects() {

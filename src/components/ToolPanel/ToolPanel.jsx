@@ -672,7 +672,7 @@ function SaveBundleDialog({ onClose, onSave, defaultName }) {
   );
 }
 
-function ProjectSaveDialog({ mode, initialName, existingNames, onCancel, onSave, onSaveAsNew }) {
+function ProjectSaveDialog({ mode, initialName, existingNames, isSaving, onCancel, onSave, onSaveAsNew }) {
   const [name, setName] = useState(initialName || '');
   const [error, setError] = useState('');
   const inputRef = React.useRef(null);
@@ -696,12 +696,14 @@ function ProjectSaveDialog({ mode, initialName, existingNames, onCancel, onSave,
     existingNames.some((n) => n.trim().toLowerCase() === val.trim().toLowerCase());
 
   const handleSaveClick = () => {
+    if (isSaving) return;
     const val = name.trim();
     if (!val) return;
     onSave(val);
   };
 
   const handleSaveAsNewClick = () => {
+    if (isSaving) return;
     const val = name.trim();
     if (!val) return;
     if (isDuplicate(val)) {
@@ -818,16 +820,18 @@ function ProjectSaveDialog({ mode, initialName, existingNames, onCancel, onSave,
                 color: '#0B1120',
                 padding: '8px 0',
                 borderRadius: '6px',
-                cursor: 'pointer',
                 fontSize: '13px',
                 fontWeight: '600',
-                transition: 'opacity 0.2s ease'
+                transition: 'opacity 0.2s ease',
+                opacity: isSaving ? 0.6 : 1,
+                cursor: isSaving ? 'not-allowed' : 'pointer'
               }}
-              onMouseEnter={(e) => e.target.style.opacity = '0.8'}
-              onMouseLeave={(e) => e.target.style.opacity = '1'}
+              onMouseEnter={(e) => { if (!isSaving) e.target.style.opacity = '0.8'; }}
+              onMouseLeave={(e) => { if (!isSaving) e.target.style.opacity = '1'; }}
               onClick={handleSaveClick}
+              disabled={isSaving}
             >
-              Save
+              {isSaving ? 'Saving…' : 'Save'}
             </button>
           </div>
 
@@ -841,16 +845,18 @@ function ProjectSaveDialog({ mode, initialName, existingNames, onCancel, onSave,
                 color: '#00E5FF',
                 padding: '8px 0',
                 borderRadius: '6px',
-                cursor: 'pointer',
+                cursor: isSaving ? 'not-allowed' : 'pointer',
                 fontSize: '13px',
                 fontWeight: '600',
-                transition: 'all 0.2s ease'
+                transition: 'all 0.2s ease',
+                opacity: isSaving ? 0.6 : 1
               }}
-              onMouseEnter={(e) => { e.target.style.background = 'rgba(0,229,255,0.1)'; }}
+              onMouseEnter={(e) => { if (!isSaving) e.target.style.background = 'rgba(0,229,255,0.1)'; }}
               onMouseLeave={(e) => { e.target.style.background = 'transparent'; }}
               onClick={handleSaveAsNewClick}
+              disabled={isSaving}
             >
-              Save As New
+              {isSaving ? 'Saving…' : 'Save As New'}
             </button>
           )}
         </div>
@@ -981,6 +987,7 @@ export default function ToolPanel() {
   const [projectSaveDialogOpen, setProjectSaveDialogOpen] = useState(false);
   const [openProjectDialogOpen, setOpenProjectDialogOpen] = useState(false);
   const [savedProjects, setSavedProjects] = useState([]);
+  const [isSavingProject, setIsSavingProject] = useState(false);
 
   React.useEffect(() => {
     listProjects().then(setSavedProjects).catch((err) => console.error('listProjects failed:', err));
@@ -990,8 +997,28 @@ export default function ToolPanel() {
     setProjectSaveDialogOpen(true);
   };
 
+  // Flatten any distorted/rotated floor plan's live transform into its own
+  // pixels before exporting state to save — otherwise the uploaded asset
+  // would still be the plain source image while distortedCorners/rotation
+  // metadata gets reapplied on top of it at render time, which is exactly
+  // right for the live editor but means the file in Storage itself never
+  // shows the warp the user actually made.
+  const bakeFloorPlanTransformsForSave = async () => {
+    const fpm = floorPlanManagerRef.current;
+    if (!fpm) return;
+    for (const id of Array.from(fpm.overlays.keys())) {
+      const entry = fpm.overlays.get(id);
+      if (entry?.overlay.distortedCorners || entry?.overlay.rotationDeg) {
+        await fpm.bakeTransformForSave(id);
+      }
+    }
+  };
+
   const handleProjectSaveNew = async (name) => {
+    if (isSavingProject) return;
+    setIsSavingProject(true);
     try {
+      await bakeFloorPlanTransformsForSave();
       const raw = getExportProject();
       const mapped = mapStateForSave(raw);
       const newId = await createProject(name, mapped.layers);
@@ -1003,11 +1030,16 @@ export default function ToolPanel() {
     } catch (err) {
       console.error('Save As New failed:', err);
       alert('Failed to save project. See console for details.');
+    } finally {
+      setIsSavingProject(false);
     }
   };
 
   const handleProjectSaveOverwrite = async (name) => {
+    if (isSavingProject) return;
+    setIsSavingProject(true);
     try {
+      await bakeFloorPlanTransformsForSave();
       const raw = getExportProject();
       const mapped = mapStateForSave(raw);
       await saveProjectData(currentProjectId, name, mapped);
@@ -1017,6 +1049,8 @@ export default function ToolPanel() {
     } catch (err) {
       console.error('Save failed:', err);
       alert('Failed to save project. See console for details.');
+    } finally {
+      setIsSavingProject(false);
     }
   };
 
@@ -2044,6 +2078,7 @@ export default function ToolPanel() {
           mode={currentProjectId ? 'resave' : 'new'}
           initialName={currentProjectName || ''}
           existingNames={savedProjects.map((p) => p.name)}
+          isSaving={isSavingProject}
           onCancel={() => setProjectSaveDialogOpen(false)}
           onSave={(name) => (currentProjectId ? handleProjectSaveOverwrite(name) : handleProjectSaveNew(name))}
           onSaveAsNew={(name) => handleProjectSaveNew(name)}

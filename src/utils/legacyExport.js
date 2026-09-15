@@ -96,13 +96,6 @@ function closeRing(path) {
     return path;
 }
 
-function centroid(path) {
-    if (!path.length) return { lat: 0, lng: 0 };
-    let sumLat = 0, sumLng = 0;
-    path.forEach(p => { sumLat += p.lat; sumLng += p.lng; });
-    return { lat: sumLat / path.length, lng: sumLng / path.length };
-}
-
 function plotLengthWidth(path) {
     let lengthStr = '', widthStr = '', sqyd = 0;
     if (path && path.length >= 3 && window.google?.maps?.geometry?.spherical) {
@@ -110,12 +103,18 @@ function plotLengthWidth(path) {
         const areaSqMeters = polygonArea(latLngs);
         sqyd = areaSqMeters > 0 ? Number((areaSqMeters * 1.19599).toFixed(2)) : 0;
 
-        if (path.length === 4) {
+        // A rectangle may be stored as an open 4-point ring or a closed
+        // 5-point ring (first point repeated as the last) — treat both the
+        // same by dropping a duplicated closing point before checking.
+        const isClosedRing = path.length === 5 && path[0].lat === path[4].lat && path[0].lng === path[4].lng;
+        const cornerLatLngs = isClosedRing ? latLngs.slice(0, 4) : latLngs;
+
+        if (cornerLatLngs.length === 4) {
             const spherical = window.google.maps.geometry.spherical;
-            const d1 = spherical.computeDistanceBetween(latLngs[0], latLngs[1]);
-            const d2 = spherical.computeDistanceBetween(latLngs[1], latLngs[2]);
-            const d3 = spherical.computeDistanceBetween(latLngs[2], latLngs[3]);
-            const d4 = spherical.computeDistanceBetween(latLngs[3], latLngs[0]);
+            const d1 = spherical.computeDistanceBetween(cornerLatLngs[0], cornerLatLngs[1]);
+            const d2 = spherical.computeDistanceBetween(cornerLatLngs[1], cornerLatLngs[2]);
+            const d3 = spherical.computeDistanceBetween(cornerLatLngs[2], cornerLatLngs[3]);
+            const d4 = spherical.computeDistanceBetween(cornerLatLngs[3], cornerLatLngs[0]);
             const maxL = Math.max(d1, d3);
             const maxW = Math.max(d2, d4);
             const formatFeet = (meters) => {
@@ -183,16 +182,33 @@ function findProjectPin(pins, floorPlanName) {
 function buildProjectSource(floorPlan, allPolygons, index, totalFloorPlans, floorplanUrlOverride = undefined, projectPin = null, pinUrlValue = '') {
     const fpId = floorPlan.id;
     // A polygon with no floorPlanId tag (drawn without the floorplan's folder
-    // selected) is still counted as belonging to this floorplan when it's the
-    // only floorplan in the project — otherwise it'd silently vanish from export.
+    // selected) is still counted as belonging to a floorplan — the only one
+    // when there's just one in the project, or the first floorplan (index 0)
+    // when there are several — otherwise it'd silently vanish from every
+    // section of the export instead of just showing up somewhere.
     const inThisFloorplan = (p) => {
         const tag = p.metadata?.floorPlanId ?? null;
         if (tag === fpId) return true;
-        if (tag === null && totalFloorPlans === 1) return true;
+        if (tag === null && (totalFloorPlans === 1 || index === 0)) return true;
         return false;
     };
 
     const projectPolys = allPolygons.filter(p => p.category === 'project' && inThisFloorplan(p));
+    // The auto-created locked-floorplan boundary's id always contains
+    // "floorplan-boundary-<fpId>" — matched with `includes` rather than
+    // `startsWith` because the Preview screen's "Download Map" flow
+    // re-creates every polygon with its own `preview-poly-` id prefix
+    // (see PreviewMap.jsx) before this ever gets called, so the exact id
+    // there is "preview-poly-floorplan-boundary-<fpId>", not just
+    // "floorplan-boundary-<fpId>". Force it to index 0 regardless of
+    // array/insertion order, so it's always the one that lands in
+    // `polygon`, never in phaseNPolygon.
+    const lockedIdx = projectPolys.findIndex(p => typeof p.id === 'string' && p.id.includes(`floorplan-boundary-${fpId}`));
+    const hasLockedBoundary = lockedIdx !== -1;
+    if (lockedIdx > 0) {
+        const [locked] = projectPolys.splice(lockedIdx, 1);
+        projectPolys.unshift(locked);
+    }
     const unitPolysList = allPolygons
         .filter(p => (p.category === 'unit' || p.category === 'pending-unit') && inThisFloorplan(p))
         .sort((a, b) => {
@@ -215,13 +231,17 @@ function buildProjectSource(floorPlan, allPolygons, index, totalFloorPlans, floo
         return `                { id: ${id}, sqyd: ${sqyd || 'null'}, length: ${lengthStr ? JSON.stringify(lengthStr) : 'null'}, width: ${widthStr ? JSON.stringify(widthStr) : 'null'}, status: "AVAILABLE", orientation: "east" },`;
     });
 
-    // Phase boundaries: if there's exactly one 'project'-category boundary
-    // under this floorplan, it goes in `polygon` (phaseN arrays omitted).
-    // If there are 2+, `polygon` stays empty and each becomes phaseNPolygon,
-    // in creation order.
-    const singleBoundary = projectPolys.length === 1;
+    // If the floorplan was locked, its auto-created boundary (now sorted to
+    // index 0 above) always goes into `polygon`, and every other
+    // project-category boundary becomes phase1Polygon, phase2Polygon, ...
+    // in creation order. When there's no locked-floorplan boundary at all,
+    // fall back to the original rule: a single manual boundary is the main
+    // `polygon`, but 2+ manual boundaries all become phases with `polygon`
+    // left empty — unchanged from before this fix.
+    const singleManualBoundary = !hasLockedBoundary && projectPolys.length === 1;
+    const hasMainBoundary = hasLockedBoundary || singleManualBoundary;
 
-    const polygonField = singleBoundary
+    const polygonField = hasMainBoundary
         ? (() => {
             const ring = closeRing(projectPolys[0].path);
             const ptsStr = ring.map(pt => `{ lat: ${num(pt.lat)}, lng: ${num(pt.lng)} }`).join(', ');
@@ -229,13 +249,12 @@ function buildProjectSource(floorPlan, allPolygons, index, totalFloorPlans, floo
         })()
         : '[]';
 
-    const phaseBlocks = singleBoundary
-        ? []
-        : projectPolys.map((p, i) => {
-            const ring = closeRing(p.path);
-            const ptsStr = ring.map(pt => `{ lat: ${num(pt.lat)}, lng: ${num(pt.lng)} }`).join(', ');
-            return `    phase${i + 1}Polygon: [${ptsStr}],`;
-        });
+    const phaseSource = hasMainBoundary ? projectPolys.slice(1) : projectPolys;
+    const phaseBlocks = phaseSource.map((p, i) => {
+        const ring = closeRing(p.path);
+        const ptsStr = ring.map(pt => `{ lat: ${num(pt.lat)}, lng: ${num(pt.lng)} }`).join(', ');
+        return `    phase${i + 1}Polygon: [${ptsStr}],`;
+    });
 
     // lat/lng come only from a custom-uploaded project pin, if one exists —
     // no more centroid-of-Plot-1 fallback guess.
@@ -442,7 +461,7 @@ function drawProject(project) {
         bounds.extend(neLL);
     }
 
-    if (project.polygon && project.polygon.length) {
+        if (project.polygon && project.polygon.length) {
         new google.maps.Polygon({
             map: mapInstance,
             paths: project.polygon,
@@ -452,6 +471,19 @@ function drawProject(project) {
         });
         project.polygon.forEach(pt => bounds.extend(pt));
     }
+
+        Object.keys(project).forEach(function (key) {
+        if (key.indexOf('phase') === 0 && key.slice(-7) === 'Polygon' && project[key] && project[key].length) {
+            new google.maps.Polygon({
+                map: mapInstance,
+                paths: project[key],
+                strokeColor: '#00d4ff',
+                strokeWeight: 2,
+                fillOpacity: 0.05
+            });
+            project[key].forEach(function (pt) { bounds.extend(pt); });
+        }
+    });
 
     (project.unitPolygons || []).forEach((path, i) => {
         const unit = (project.units || [])[i];
@@ -616,8 +648,8 @@ function buildLandmarkFilterPanel() {
     const categories = Object.keys(landmarkCategoryEntries).sort();
     if (categories.length === 0) return;
 
-    injectLandmarkFilterCss();
-    categories.forEach(function (cat) { setLandmarkCategoryVisible(cat, false); });
+        injectLandmarkFilterCss();
+    categories.forEach(function (cat) { setLandmarkCategoryVisible(cat, true); });
 
     const panel = document.createElement('div');
     panel.id = 'lm-filter-panel';
@@ -626,7 +658,7 @@ function buildLandmarkFilterPanel() {
     html += \`
         <div class="lm-filter-toggle" id="lm-show-all-container">
             <label class="lm-switch">
-                <input type="checkbox" id="lm-show-all-toggle">
+                <input type="checkbox" id="lm-show-all-toggle" checked>
                 <span class="lm-slider"></span>
             </label>
             <span>Show All</span>
@@ -642,7 +674,7 @@ function buildLandmarkFilterPanel() {
         html += \`
             <div class="lm-filter-toggle" id="\${safeId}-row">
                 <label class="lm-switch">
-                    <input type="checkbox" class="lm-cat-toggle" data-cat="\${cat}" id="\${safeId}">
+                                        <input type="checkbox" class="lm-cat-toggle" data-cat="\${cat}" id="\${safeId}" checked>
                     <span class="lm-slider"></span>
                 </label>
                 <span>\${cat}</span>

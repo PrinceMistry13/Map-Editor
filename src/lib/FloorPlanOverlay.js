@@ -174,14 +174,19 @@ export function createFloorPlanOverlayClass() {
           }
         });
 
-        const H = solveHomography(src, dst);
-        this.img.style.position = 'absolute';
-        this.img.style.left = '0px';
-        this.img.style.top = '0px';
-        this.img.style.width = w + 'px';
-        this.img.style.height = h + 'px';
-        this.img.style.transformOrigin = '0 0';
-        this.img.style.transform = `matrix3d(${H.join(',')})`;
+        try {
+          const H = solveHomography(src, dst);
+          this.img.style.position = 'absolute';
+          this.img.style.left = '0px';
+          this.img.style.top = '0px';
+          this.img.style.width = w + 'px';
+          this.img.style.height = h + 'px';
+          this.img.style.transformOrigin = '0 0';
+          this.img.style.transform = `matrix3d(${H.join(',')})`;
+        } catch (e) {
+          // Degenerate quad mid-drag (e.g. two corners dragged together) —
+          // keep the last valid transform rather than crashing draw().
+        }
 
       } else {
         const centerPx = projection.fromLatLngToDivPixel(new window.google.maps.LatLng(this.center.lat, this.center.lng));
@@ -232,6 +237,18 @@ export function createFloorPlanOverlayClass() {
     }
 
     onRemove() {
+      if (this.interactState) {
+        // Overlay is being torn down mid-drag/resize/rotate — clear the
+        // document-level listeners and restore map gestures that
+        // onInteractStart set, instead of leaving them stuck on forever.
+        document.removeEventListener('mousemove', this.onInteractMove);
+        document.removeEventListener('mouseup', this.onInteractEnd);
+        document.removeEventListener('touchmove', this.onInteractMove);
+        document.removeEventListener('touchend', this.onInteractEnd);
+        const map = this.getMap();
+        if (map) map.setOptions({ draggable: true, gestureHandling: "greedy", scrollwheel: true, disableDoubleClickZoom: false });
+        this.interactState = null;
+      }
       if (this.div) {
         if (this.div.parentNode) this.div.parentNode.removeChild(this.div);
         this.div = null;

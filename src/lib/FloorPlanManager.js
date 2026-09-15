@@ -295,7 +295,11 @@ export default class FloorPlanManager {
         { x: dc.se.lng, y: dc.se.lat },
         { x: dc.sw.lng, y: dc.sw.lat }
       ];
-      H_matrix = solveHomography(src, dst);
+      try {
+        H_matrix = solveHomography(src, dst);
+      } catch (e) {
+        console.warn('projectPixelsToLatLngs: degenerate distorted quad, falling back to rectangle projection:', e);
+      }
     }
 
     return pixels.map((p) => {
@@ -368,7 +372,11 @@ export default class FloorPlanManager {
         { x: dc.sw.lng, y: dc.sw.lat }
       ];
       // Swap src and dst to solve for the inverse homography
-      H_inv_matrix = solveHomography(dst, src);
+      try {
+        H_inv_matrix = solveHomography(dst, src);
+      } catch (e) {
+        console.warn('projectLatLngsToPixels: degenerate distorted quad, falling back to rectangle projection:', e);
+      }
     }
 
     return latLngs.map((ll) => {
@@ -542,9 +550,12 @@ export default class FloorPlanManager {
     }
     this.overlays = newMap;
 
-    // Reverse iterate so top items get higher z-indexes
+    // Panel lists items top-to-bottom in `keys` order, so reverse-iterate
+    // here: the last key gets the lowest counter value and the first
+    // (topmost in the panel) ends up with the highest z-index.
     let zIdxCounter = 0;
-    for (const entry of this.overlays.values()) {
+    for (let i = keys.length - 1; i >= 0; i--) {
+      const entry = this.overlays.get(keys[i]);
       entry.overlay.update({ zIndex: ++zIdxCounter });
     }
 
@@ -600,16 +611,23 @@ export default class FloorPlanManager {
     // whoever wants to auto-plot the boundary polygon.
     if (isLocked) {
       let path = await this.computeImageBoundary(id);
-      if (!path) {
-        if (entry.overlay.distortedCorners) {
-          const dc = entry.overlay.distortedCorners;
-          path = [dc.nw, dc.ne, dc.se, dc.sw];
-        } else {
-          const c = this.computeCorners(entry.overlay);
-          path = [c.nw, c.ne, c.se, c.sw];
+      // The floor plan may have been unlocked again, or deleted entirely,
+      // while computeImageBoundary's async trace was still in flight —
+      // re-check before firing onLock so a stale toggle can't auto-plot
+      // a boundary for a floor plan that's no longer (or never) locked.
+      const stillEntry = this.overlays.get(id);
+      if (stillEntry && stillEntry.overlay.isLocked) {
+        if (!path) {
+          if (stillEntry.overlay.distortedCorners) {
+            const dc = stillEntry.overlay.distortedCorners;
+            path = [dc.nw, dc.ne, dc.se, dc.sw];
+          } else {
+            const c = this.computeCorners(stillEntry.overlay);
+            path = [c.nw, c.ne, c.se, c.sw];
+          }
         }
+        this.callbacks.onLock && this.callbacks.onLock(id, path, stillEntry);
       }
-      this.callbacks.onLock && this.callbacks.onLock(id, path, entry);
     }
     this.callbacks.onChange && this.callbacks.onChange();
   }
@@ -792,5 +810,88 @@ export default class FloorPlanManager {
     });
 
     this.callbacks.onChange && this.callbacks.onChange(id);
+  }
+
+  // Bakes whatever live transform is currently showing (quad distortion,
+  // and/or plain rotation) into the image's own pixels, and flattens the
+  // floor plan to a plain axis-aligned rectangle — same outcome as
+  // bakeDistortToManual, generalized to rotation-only floor plans too, and
+  // without pushing an undo entry since this runs automatically before a
+  // save rather than as a direct user edit. Rotation is normally applied
+  // live via CSS (never baked into pixels — see FloorPlanOverlay.draw()'s
+  // manual-mode branch), so without this step the *stored* asset would
+  // still be the plain unrotated/undistorted source image, while the app
+  // reapplies distortedCorners/rotationDeg on top at render time — the
+  // stored file itself must show the warped result the user actually made.
+  async bakeTransformForSave(id) {
+    const entry = this.overlays.get(id);
+    if (!entry) return false;
+    const { overlay } = entry;
+
+    // A rotated (but undistorted) rectangle's ground corners are computed
+    // the same way computeCorners() derives them elsewhere; feeding those
+    // into the distort-warp baker (instead of the rigid rotate-only branch)
+    // reuses one exact, already-correct projective-warp code path for both
+    // cases instead of duplicating separate bounding-box math.
+    const corners = overlay.distortedCorners || (overlay.rotationDeg ? this.computeCorners(overlay) : null);
+    if (!corners) return false; // already flat and unrotated — nothing to bake
+
+    let img = entry.imgEl;
+    if (!img || !img.complete || img.naturalWidth === 0) {
+      img = await new Promise((resolve, reject) => {
+        const newImg = new Image();
+        newImg.crossOrigin = 'anonymous';
+        newImg.onload = () => resolve(newImg);
+        newImg.onerror = reject;
+        newImg.src = entry.url;
+      });
+    }
+
+    const blob = await bakeFloorplanImage(img, {
+      distortedCorners: corners,
+      rotation: 0, // rotation is already encoded into `corners`
+      opacity: 1, // bake at full opacity — overlay.opacity still controls display separately
+    });
+    if (!blob) return false; // baking failed (e.g. tainted canvas) — leave as-is
+
+    const newUrl = URL.createObjectURL(blob);
+    const bakedImg = await new Promise((resolve, reject) => {
+      const bi = new Image();
+      bi.onload = () => resolve(bi);
+      bi.onerror = reject;
+      bi.src = newUrl;
+    });
+
+    // Axis-aligned bounding box of the corners in Mercator meters — matches
+    // how bakeFloorplanImage lays out its own output canvas.
+    const R = 6378137;
+    const toMerc = (lat, lng) => ({
+      x: (lng * Math.PI * R) / 180,
+      y: R * Math.log(Math.tan(Math.PI / 4 + (lat * Math.PI) / 360)),
+    });
+    const pts = [toMerc(corners.nw.lat, corners.nw.lng), toMerc(corners.ne.lat, corners.ne.lng), toMerc(corners.se.lat, corners.se.lng), toMerc(corners.sw.lat, corners.sw.lng)];
+    const minX = Math.min(...pts.map(p => p.x));
+    const maxX = Math.max(...pts.map(p => p.x));
+    const minY = Math.min(...pts.map(p => p.y));
+    const maxY = Math.max(...pts.map(p => p.y));
+
+    const widthMeters = maxX - minX;
+    const heightMeters = maxY - minY;
+    const cxMerc = (minX + maxX) / 2;
+    const cyMerc = (minY + maxY) / 2;
+    const lng = (cxMerc * 180) / (Math.PI * R);
+    const lat = (180 / Math.PI) * (2 * Math.atan(Math.exp(cyMerc / R)) - Math.PI / 2);
+
+    entry.url = newUrl;
+    entry.imgEl = bakedImg;
+    entry.originalWidth = bakedImg.naturalWidth;
+    entry.originalHeight = bakedImg.naturalHeight;
+    overlay.url = newUrl;
+    if (overlay.img) overlay.img.src = newUrl;
+    overlay.distortedCorners = null;
+    overlay.update({ center: { lat, lng }, widthMeters, heightMeters, rotationDeg: 0, mode: 'manual' });
+
+    this.callbacks.onChange && this.callbacks.onChange(id);
+    return true;
   }
 }

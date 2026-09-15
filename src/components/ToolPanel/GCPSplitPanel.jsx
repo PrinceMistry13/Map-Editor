@@ -239,7 +239,7 @@ export default function GCPSplitPanel() {
                 <td>{i + 1}</td>
                 <td>{Math.round(pt.img.x)}, {Math.round(pt.img.y)}</td>
                 <td>{pt.map.lat.toFixed(5)}, {pt.map.lng.toFixed(5)}</td>
-                <td>{pt.error ? pt.error.toFixed(2) : '-'}</td>
+                <td>{pt.error != null ? pt.error.toFixed(2) : '-'}</td>
                 <td>
                   <button className="gcp-del-btn" onClick={() => removePoint(pt.id)}>×</button>
                 </td>

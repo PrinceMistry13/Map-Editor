@@ -37,8 +37,7 @@ export function solveHomography(src, dst) {
     B[max] = tempB;
 
     if (Math.abs(A[i][i]) < 1e-10) {
-      console.warn("solveHomography: singular matrix");
-      return [1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1]; // fallback to identity
+      throw new Error("solveHomography: singular matrix (degenerate point quad)");
     }
 
     for (let j = i + 1; j < 8; j++) {

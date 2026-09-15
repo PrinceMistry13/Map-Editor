@@ -22,7 +22,6 @@ export default function App() {
       <Routes>
         <Route path="/" element={<MapWorkspace />} />
         <Route path="/workspace" element={<MapWorkspace />} />
-        <Route path="/workspace/:projectId" element={<MapWorkspace />} />
         <Route path="/preview" element={<PreviewMap />} />
       </Routes>
     </BrowserRouter>

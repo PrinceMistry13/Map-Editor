@@ -37,7 +37,7 @@ const blobUrlToBytes = async (url) => {
     const blob = await res.blob();
     return await blob.arrayBuffer();
   } catch (e) {
-    console.warn("Failed to fetch blob", e);
+    console.error("Failed to fetch pin/icon image:", url, e);
     return null;
   }
 };
@@ -491,6 +491,10 @@ function PreviewMap() {
         onSelect: () => { }, // No popup needed for floor plans
       });
       projectData.floorPlans?.forEach(fp => {
+        if (!fp.bounds) {
+          console.warn('Skipping floor plan with no bounds:', fp.id);
+          return;
+        }
         const fpId = `preview-fp-${fp.id}`;
         const center = { lat: (fp.bounds.sw.lat + fp.bounds.ne.lat) / 2, lng: (fp.bounds.sw.lng + fp.bounds.ne.lng) / 2 };
 
@@ -1018,7 +1022,7 @@ function PreviewMap() {
                                         <ChevronIcon />
                                       </button>
                                     </div>
-                                    {expandedLayers['plots-' + fp.id] && nestedPlots.map(c => renderItemChild(c, false, true))}
+                                    {expandedLayers['plots-' + fp.id] && nestedPlots.map(c => renderItemChild(c, false))}
                                   </div>
                                 );
                               }

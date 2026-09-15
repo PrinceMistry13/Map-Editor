@@ -80,6 +80,13 @@ export async function bakeFloorplanImage(img, fp) {
       // Scale to roughly match the original image resolution
       const localWidth = maxX - minX;
       const localHeight = maxY - minY;
+      if (!(localWidth > 0) || !(localHeight > 0)) {
+        // Degenerate quad (two corners coincide, or collinear) — bail out
+        // rather than dividing by zero into a NaN/blank canvas.
+        console.error("bakeFloorplanImage: degenerate distorted quad, skipping bake");
+        resolve(null);
+        return;
+      }
       const scale = Math.max(W / localWidth, H / localHeight);
 
       const targetQuad = [
@@ -106,7 +113,14 @@ export async function bakeFloorplanImage(img, fp) {
         { x: 0, y: H }
       ];
 
-      const H_mat = solveHomography(srcQuad, targetQuad);
+      let H_mat;
+      try {
+        H_mat = solveHomography(srcQuad, targetQuad);
+      } catch (e) {
+        console.error("bakeFloorplanImage: could not solve homography, skipping bake:", e);
+        resolve(null);
+        return;
+      }
 
       // Homography mapping function
       // solveHomography returns a 16-element column-major CSS matrix3d array

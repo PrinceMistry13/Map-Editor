@@ -315,8 +315,10 @@ function MapWorkspaceInner() {
 
   const activeLayerIdRef = useRef(activeLayerId);
   const selectedLayerItemIdRef = useRef(selectedLayerItemId);
+  const projectRef = useRef(project);
   useEffect(() => { activeLayerIdRef.current = activeLayerId; }, [activeLayerId]);
   useEffect(() => { selectedLayerItemIdRef.current = selectedLayerItemId; }, [selectedLayerItemId]);
+  useEffect(() => { projectRef.current = project; }, [project]);
   useEffect(() => {
     if (!selectedLayerItemId) return;
     const match = /^(?:folder|plots)-(.+)$/.exec(selectedLayerItemId);
@@ -1057,12 +1059,12 @@ function MapWorkspaceInner() {
 
       if (targetContainerId) {
         if (targetContainerId.startsWith('folder-')) {
-          const settings = project?.folderSettings?.[targetContainerId];
+          const settings = projectRef.current?.folderSettings?.[targetContainerId];
           if (settings && settings.styleMode === 'uniform' && settings.color) {
             finalColor = settings.color;
           }
         } else if (targetContainerId.startsWith('layer-')) {
-          const layer = project?.layers?.find(l => l.id === targetContainerId);
+          const layer = projectRef.current?.layers?.find(l => l.id === targetContainerId);
           if (layer && layer.styleMode === 'uniform' && layer.color) {
             finalColor = layer.color;
           }

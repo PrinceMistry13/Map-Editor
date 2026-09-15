@@ -160,7 +160,7 @@ export default class PolygonManager {
       }
     });
 
-    this.map.addListener('mousemove', trackHover);
+    entry.mapHoverListener = this.map.addListener('mousemove', trackHover);
 
     return entry;
   }
@@ -494,6 +494,7 @@ export default class PolygonManager {
     const path = entry.gPolygon.getPath().getArray().map((ll) => ({ lat: ll.lat(), lng: ll.lng() }));
     const { name, category } = entry;
     entry.gPolygon.setMap(null);
+    entry.mapHoverListener && entry.mapHoverListener.remove();
     this.polygons.delete(id);
     if (this.selectedId === id) {
       this.selectedId = null;
@@ -576,10 +577,13 @@ export default class PolygonManager {
     }
     this.polygons = newMap;
 
-    // Adjust zIndex to reflect new order
-    // Reverse iterate so top items get higher z-indexes
+    // Adjust zIndex to reflect new order.
+    // Panel lists items top-to-bottom in `keys` order, so reverse-iterate
+    // here: the last key gets the lowest counter value and the first
+    // (topmost in the panel) ends up with the highest z-index.
     let zIdxCounter = 0;
-    for (const entry of this.polygons.values()) {
+    for (let i = keys.length - 1; i >= 0; i--) {
+      const entry = this.polygons.get(keys[i]);
       const base = this.getBaseZIndex(entry.category);
       entry.gPolygon.setOptions({ zIndex: base + (++zIdxCounter) });
     }
@@ -631,7 +635,10 @@ export default class PolygonManager {
   }
 
   clearAll() {
-    this.polygons.forEach((entry) => entry.gPolygon.setMap(null));
+    this.polygons.forEach((entry) => {
+      entry.gPolygon.setMap(null);
+      entry.mapHoverListener && entry.mapHoverListener.remove();
+    });
     this.polygons.clear();
     this.deselect();
   }
