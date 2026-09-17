@@ -12,20 +12,29 @@ export default class PinManager {
     }
 
     // ---------------------------------------------------------------- placement
-    armPlacement(defaultColor = '#00CED1', layerId = 'layer-1', metadata = {}) {
+    // `getFallbackFloorPlanId`, when given, is called at pin-creation time
+    // (not here) to resolve the "currently open floorplan folder" — so a
+    // pin placed after the open folder changes, while the tool stayed
+    // armed, gets tagged with the folder that's open *when it's placed*,
+    // not whichever was open when the tool was activated. It's skipped
+    // whenever `metadata.floorPlanId` was already set explicitly (e.g. a
+    // folder selected in the layers panel), which always wins.
+    armPlacement(defaultColor = '#00CED1', layerId = 'layer-1', metadata = {}, getFallbackFloorPlanId = null) {
         if (this.armed) return;
         this.armed = true;
         this._defaultColor = defaultColor;
         this._layerId = layerId;
         this._metadata = metadata;
+        this._getFallbackFloorPlanId = getFallbackFloorPlanId;
         this.map.setOptions({ draggableCursor: 'copy' });
         this._clickListener = this.map.addListener('click', (e) => {
             const id = nextId('pin');
             const position = { lat: e.latLng.lat(), lng: e.latLng.lng() };
-            this.createPin(id, `Pin ${this.pins.size + 1}`, this._defaultColor, position, 'default', null, this._layerId, this._metadata, 'project', null);
+            const metadata = this._resolveMetadata();
+            this.createPin(id, `Pin ${this.pins.size + 1}`, this._defaultColor, position, 'default', null, this._layerId, metadata, 'project', null);
             this.callbacks.pushHistory && this.callbacks.pushHistory({
                 undo: () => this.deletePin(id, true),
-                redo: () => this.createPin(id, `Pin ${this.pins.size + 1}`, this._defaultColor, position, 'default', null, this._layerId, this._metadata, 'project', null),
+                redo: () => this.createPin(id, `Pin ${this.pins.size + 1}`, this._defaultColor, position, 'default', null, this._layerId, metadata, 'project', null),
             });
             this.callbacks.onChange && this.callbacks.onChange();
             this.select(id, position);
@@ -33,9 +42,16 @@ export default class PinManager {
         });
     }
 
+    _resolveMetadata() {
+        if (this._metadata && this._metadata.floorPlanId) return this._metadata;
+        const fallbackId = this._getFallbackFloorPlanId && this._getFallbackFloorPlanId();
+        return fallbackId ? { ...this._metadata, floorPlanId: fallbackId } : this._metadata;
+    }
+
     disarmPlacement() {
         if (!this.armed) return;
         this.armed = false;
+        this._getFallbackFloorPlanId = null;
         this.map.setOptions({ draggableCursor: null });
         if (this._clickListener) window.google.maps.event.removeListener(this._clickListener);
     }
@@ -299,6 +315,28 @@ export default class PinManager {
         if (!entry) return;
         entry.itemVisible = entry.itemVisible === false ? true : false;
         this.callbacks.onChange && this.callbacks.onChange();
+    }
+
+    setMetadata(id, key, value) {
+        const entry = this.pins.get(id);
+        if (!entry) return;
+        const before = entry.metadata[key];
+        entry.metadata[key] = value;
+
+        this.callbacks.pushHistory && this.callbacks.pushHistory({
+            undo: () => {
+                entry.metadata[key] = before;
+                this.callbacks.onChange && this.callbacks.onChange();
+                if (this.selectedId === id) this.callbacks.onSelect && this.callbacks.onSelect({ ...entry }, entry.marker.getPosition().toJSON());
+            },
+            redo: () => {
+                entry.metadata[key] = value;
+                this.callbacks.onChange && this.callbacks.onChange();
+                if (this.selectedId === id) this.callbacks.onSelect && this.callbacks.onSelect({ ...entry }, entry.marker.getPosition().toJSON());
+            },
+        });
+        this.callbacks.onChange && this.callbacks.onChange();
+        if (this.selectedId === id) this.callbacks.onSelect && this.callbacks.onSelect({ ...entry }, entry.marker.getPosition().toJSON());
     }
 
     reorder(draggedId, targetId) {

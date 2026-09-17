@@ -214,10 +214,12 @@ const generateKMLString = (data, exportMode = 'kml') => {
         }
       }
 
+      const isBoundaryPoly = typeof poly.id === 'string' && poly.id.includes('floorplan-boundary-');
       const extData = `
       <ExtendedData>
         <Data name="appCategory"><value>${poly.category || 'project'}</value></Data>
-        <Data name="appLayerId"><value>${poly.layerId || 'layer-1'}</value></Data>
+        <Data name="appLayerId"><value>${poly.layerId || 'layer-1'}</value></Data>${isBoundaryPoly ? `
+        <Data name="appIsBoundary"><value>true</value></Data>` : ''}
       </ExtendedData>`;
 
       const str = `
@@ -1548,6 +1550,27 @@ export default function ToolPanel() {
     }
 
     const placemarks = doc.getElementsByTagName('Placemark');
+
+    const explicitBoundaryFpIds = new Set();
+    for (let i = 0; i < placemarks.length; i++) {
+      const pm = placemarks[i];
+      if (!pm.getElementsByTagName('Polygon')[0]) continue;
+      if (readExtendedData(pm).appIsBoundary !== 'true') continue;
+      let fpFolderId = null;
+      if (pm.parentNode && (pm.parentNode.tagName === 'Folder' || pm.parentNode.localName === 'Folder' || pm.parentNode.nodeName === 'Folder')) {
+        const folderName = pm.parentNode.getElementsByTagName('name')[0]?.textContent?.trim();
+        if (folderName && floorPlanMap[folderName]) fpFolderId = floorPlanMap[folderName];
+      }
+      if (!fpFolderId) {
+        const ancestors = getAncestorFolderNames(pm);
+        const structural = new Set(['Plots', 'Landmarks', 'Roads', 'Polygons', 'Pins', ...Object.values(LANDMARK_PIN_TYPE_LABELS)]);
+        const fpName = ancestors.find(a => !structural.has(a) && floorPlanMap[a]);
+        if (fpName) fpFolderId = floorPlanMap[fpName];
+      }
+      if (fpFolderId) explicitBoundaryFpIds.add(fpFolderId);
+    }
+    const boundaryAssignedForFp = {};
+
     for (let i = 0; i < placemarks.length; i++) {
       const pm = placemarks[i];
       const name = pm.getElementsByTagName('name')[0]?.textContent || `Imported ${i}`;
@@ -1607,7 +1630,12 @@ export default function ToolPanel() {
               if (fpName) fpFolderId = floorPlanMap[fpName];
             }
 
-            const isBoundary = category === 'project';
+            const isBoundary = category === 'project' && fpFolderId && (
+              explicitBoundaryFpIds.has(fpFolderId)
+                ? ext.appIsBoundary === 'true'
+                : !boundaryAssignedForFp[fpFolderId]
+            );
+            if (isBoundary) boundaryAssignedForFp[fpFolderId] = true;
             const id = (isBoundary && fpFolderId) ? `floorplan-boundary-${fpFolderId}` : 'poly-' + Date.now() + '-' + i;
             const metadata = fpFolderId ? { floorPlanId: fpFolderId } : undefined;
             polygonManagerRef.current?.loadPolygon({

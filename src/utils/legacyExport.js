@@ -164,19 +164,18 @@ function buildPinMapSource() {
 
 // ── per-floorplan project object ────────────────────────────────────────
 
-// Finds the single custom (non-landmark) pin belonging to this floorplan/
-// project — matched purely by NAME equality (case-insensitive, trimmed)
-// between the pin's name and the floorplan's own name. metadata.floorPlanId
-// is ignored entirely for this match.
-function findProjectPin(pins, floorPlanName) {
-    if (!floorPlanName) return null;
-    const target = String(floorPlanName).trim().toLowerCase();
-    return (pins || []).find(p =>
-        p.category !== 'landmark' &&
-        p.position &&
-        (p.imageDataUrl || p.imageUrl) &&
-        p.name && String(p.name).trim().toLowerCase() === target
-    ) || null;
+// `allowUntaggedFallback` mirrors the polygon-side `inThisFloorplan` rule in
+// buildProjectSource below: a pin with no floorPlanId tag (placed without a
+// floorplan folder open, or from an older project) still counts as belonging
+// to the single/first floorplan rather than silently losing its image.
+function findProjectPin(pins, fpId, allowUntaggedFallback = false) {
+    return (pins || []).find(p => {
+        if (p.category === 'landmark' || !p.position || !(p.imageDataUrl || p.imageUrl)) return false;
+        const tag = p.metadata?.floorPlanId ?? null;
+        if (fpId == null) return tag == null;
+        if (tag === fpId) return true;
+        return allowUntaggedFallback && tag == null;
+    }) || null;
 }
 
 function buildProjectSource(floorPlan, allPolygons, index, totalFloorPlans, floorplanUrlOverride = undefined, projectPin = null, pinUrlValue = '') {
@@ -307,14 +306,14 @@ export function buildLegacyExportSource(data) {
 
     const projectSources = floorPlans.length
         ? floorPlans.map((fp, i) => {
-            const pin = findProjectPin(pins, fp.name);
+            const pin = findProjectPin(pins, fp.id, floorPlans.length === 1 || i === 0);
             // No zip here — the image just points at whatever URL the pin
             // already has (data: or blob:).
             const pinUrl = pin ? (pin.imageDataUrl || pin.imageUrl || '') : '';
             return buildProjectSource(fp, polygons, i, floorPlans.length, undefined, pin, pinUrl);
         })
         : [(() => {
-            const pin = findProjectPin(pins, 'Project 1');
+            const pin = findProjectPin(pins, null);
             const pinUrl = pin ? (pin.imageDataUrl || pin.imageUrl || '') : '';
             return buildProjectSource({ id: null, name: 'Project 1', bounds: null, floorplan: '' }, polygons, 0, 1, undefined, pin, pinUrl);
         })()];
@@ -373,14 +372,14 @@ export function downloadLegacyExport(data, filename = 'project-export.js') {
 export function getUsedProjectPinFiles(pins, floorPlans) {
     const result = [];
     if (floorPlans && floorPlans.length) {
-        floorPlans.forEach(fp => {
-            const pin = findProjectPin(pins, fp.name);
+        floorPlans.forEach((fp, i) => {
+            const pin = findProjectPin(pins, fp.id, floorPlans.length === 1 || i === 0);
             if (pin && (pin.imageDataUrl || pin.imageUrl)) {
                 result.push({ fpId: fp.id, fileName: `pin-${fp.id}.png`, pin });
             }
         });
     } else {
-        const pin = findProjectPin(pins, 'Project 1');
+        const pin = findProjectPin(pins, null);
         if (pin && (pin.imageDataUrl || pin.imageUrl)) {
             result.push({ fpId: 'default', fileName: 'pin-default.png', pin });
         }
@@ -788,7 +787,7 @@ export function buildStandaloneMainJs(data, opts = {}) {
 
     const projectSources = floorPlans.length
         ? floorPlans.map((fp, i) => {
-            const pin = findProjectPin(pins, fp.name);
+            const pin = findProjectPin(pins, fp.id, floorPlans.length === 1 || i === 0);
             const pinUrl = (pin && (pin.imageDataUrl || pin.imageUrl)) ? `images/pin/pin-${fp.id}.png` : '';
             return buildProjectSource(
                 fp, polygons, i, floorPlans.length,
@@ -797,7 +796,7 @@ export function buildStandaloneMainJs(data, opts = {}) {
             );
         })
         : [(() => {
-            const pin = findProjectPin(pins, 'Project 1');
+            const pin = findProjectPin(pins, null);
             const pinUrl = (pin && (pin.imageDataUrl || pin.imageUrl)) ? 'images/pin/pin-default.png' : '';
             return buildProjectSource({ id: null, name: 'Project 1', bounds: null, floorplan: '' }, polygons, 0, 1, '', pin, pinUrl);
         })()];

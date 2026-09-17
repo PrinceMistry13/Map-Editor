@@ -426,6 +426,48 @@ export default function LayersPanel({ tick = 0 }) {
   const draggedItemIdRef = useRef(null);
   const draggedItemTypeRef = useRef(null);
 
+  const lpContentRef = useRef(null);
+  const autoScrollStateRef = useRef({ raf: null, speed: 0 });
+  const AUTO_SCROLL_EDGE = 60;
+  const AUTO_SCROLL_MAX_SPEED = 18;
+
+  const stopAutoScroll = () => {
+    if (autoScrollStateRef.current.raf) {
+      cancelAnimationFrame(autoScrollStateRef.current.raf);
+      autoScrollStateRef.current.raf = null;
+    }
+    autoScrollStateRef.current.speed = 0;
+  };
+
+  const runAutoScroll = () => {
+    const el = lpContentRef.current;
+    if (!el || autoScrollStateRef.current.speed === 0) {
+      autoScrollStateRef.current.raf = null;
+      return;
+    }
+    el.scrollTop += autoScrollStateRef.current.speed;
+    autoScrollStateRef.current.raf = requestAnimationFrame(runAutoScroll);
+  };
+
+  const handlePanelAutoScroll = (e) => {
+    const el = lpContentRef.current;
+    if (!el) return;
+    const rect = el.getBoundingClientRect();
+    const y = e.clientY;
+    let speed = 0;
+    if (y < rect.top + AUTO_SCROLL_EDGE) {
+      const intensity = Math.min(1, (rect.top + AUTO_SCROLL_EDGE - y) / AUTO_SCROLL_EDGE);
+      speed = -Math.ceil(AUTO_SCROLL_MAX_SPEED * intensity);
+    } else if (y > rect.bottom - AUTO_SCROLL_EDGE) {
+      const intensity = Math.min(1, (y - (rect.bottom - AUTO_SCROLL_EDGE)) / AUTO_SCROLL_EDGE);
+      speed = Math.ceil(AUTO_SCROLL_MAX_SPEED * intensity);
+    }
+    autoScrollStateRef.current.speed = speed;
+    if (speed !== 0 && !autoScrollStateRef.current.raf) {
+      autoScrollStateRef.current.raf = requestAnimationFrame(runAutoScroll);
+    }
+  };
+
   const handleItemDragStart = (e, id, type) => {
     e.stopPropagation();
     draggedItemIdRef.current = id;
@@ -433,18 +475,80 @@ export default function LayersPanel({ tick = 0 }) {
     e.dataTransfer.effectAllowed = "move";
     e.dataTransfer.setData('text/plain', id);
   };
-  const handleItemDrop = (e, targetId, targetType) => {
+  // Looks up an item's manager entry by type, regardless of whether it's the
+  // dragged item or the drop target — pins/polygons only, since landmarks
+  // and floorplans never carry a floorPlanId tag.
+  const getMovableEntry = (type, id) => {
+    if (type === 'pin') return pinManagerRef.current?.pins.get(id);
+    if (type === 'polygon' || type === 'road') return polygonManagerRef.current?.polygons.get(id);
+    return undefined;
+  };
+  // A floorplan folder's own layer, so a drop target that's a folder header
+  // (type 'floorplan') can still be layer-matched against the dragged item.
+  const getEntryLayerId = (type, id) => {
+    if (type === 'floorplan') return floorPlanManagerRef.current?.getState().find(f => f.id === id)?.layerId;
+    return getMovableEntry(type, id)?.layerId;
+  };
+
+  const handleItemDrop = (e, targetId, targetType, targetFloorPlanId = null) => {
     e.preventDefault();
     e.stopPropagation();
     const draggedItemId = draggedItemIdRef.current;
     const draggedItemType = draggedItemTypeRef.current;
-    if (draggedItemId && draggedItemId !== targetId && draggedItemType === targetType) {
-      if ((draggedItemType === 'polygon' || draggedItemType === 'road') && polygonManagerRef.current) {
-        polygonManagerRef.current.reorder(draggedItemId, targetId);
-      } else if (draggedItemType === 'pin' && pinManagerRef.current) {
-        pinManagerRef.current.reorder(draggedItemId, targetId);
-      } else if (draggedItemType === 'floorplan' && floorPlanManagerRef.current) {
-        floorPlanManagerRef.current.reorder(draggedItemId, targetId);
+    if (draggedItemId && draggedItemId !== targetId) {
+      if (draggedItemType === 'polygon' || draggedItemType === 'pin') {
+        const draggedEntry = getMovableEntry(draggedItemType, draggedItemId);
+        const targetLayerId = getEntryLayerId(targetType, targetId);
+        // Only re-tag the floorPlanId when the drop target lives in the same
+        // layer as the dragged item — a cross-layer drop never moves the
+        // item into that layer (see reorder's sameLayer/bothLandmarks guard
+        // below), so tagging it there would orphan the reference.
+        if (draggedEntry && draggedEntry.category !== 'landmark' && targetLayerId !== undefined && draggedEntry.layerId === targetLayerId) {
+          const mgr = draggedItemType === 'pin' ? pinManagerRef.current : polygonManagerRef.current;
+          mgr?.setMetadata(draggedItemId, 'floorPlanId', targetFloorPlanId || undefined);
+        }
+      }
+      if (draggedItemType === targetType) {
+        if ((draggedItemType === 'polygon' || draggedItemType === 'road') && polygonManagerRef.current) {
+          polygonManagerRef.current.reorder(draggedItemId, targetId);
+        } else if (draggedItemType === 'pin' && pinManagerRef.current) {
+          pinManagerRef.current.reorder(draggedItemId, targetId);
+        } else if (draggedItemType === 'floorplan' && floorPlanManagerRef.current) {
+          floorPlanManagerRef.current.reorder(draggedItemId, targetId);
+        }
+      }
+    }
+    draggedItemIdRef.current = null;
+    draggedItemTypeRef.current = null;
+  };
+
+  const handleItemDropToFloorplan = (e, fpId) => {
+    e.preventDefault();
+    e.stopPropagation();
+    const draggedItemId = draggedItemIdRef.current;
+    const draggedItemType = draggedItemTypeRef.current;
+    if (draggedItemId && (draggedItemType === 'polygon' || draggedItemType === 'pin')) {
+      const draggedEntry = getMovableEntry(draggedItemType, draggedItemId);
+      const targetLayerId = getEntryLayerId('floorplan', fpId);
+      if (draggedEntry && draggedEntry.category !== 'landmark' && targetLayerId !== undefined && draggedEntry.layerId === targetLayerId) {
+        const mgr = draggedItemType === 'pin' ? pinManagerRef.current : polygonManagerRef.current;
+        mgr?.setMetadata(draggedItemId, 'floorPlanId', fpId);
+      }
+    }
+    draggedItemIdRef.current = null;
+    draggedItemTypeRef.current = null;
+  };
+
+  const handleItemDropToRoot = (e) => {
+    e.preventDefault();
+    e.stopPropagation();
+    const draggedItemId = draggedItemIdRef.current;
+    const draggedItemType = draggedItemTypeRef.current;
+    if (draggedItemId && (draggedItemType === 'polygon' || draggedItemType === 'pin')) {
+      const draggedEntry = getMovableEntry(draggedItemType, draggedItemId);
+      if (draggedEntry && draggedEntry.category !== 'landmark') {
+        const mgr = draggedItemType === 'pin' ? pinManagerRef.current : polygonManagerRef.current;
+        mgr?.setMetadata(draggedItemId, 'floorPlanId', undefined);
       }
     }
     draggedItemIdRef.current = null;
@@ -739,7 +843,8 @@ export default function LayersPanel({ tick = 0 }) {
           draggable
           onDragStart={(e) => handleItemDragStart(e, child.id, child.type)}
           onDragOver={handleDragOver}
-          onDrop={(e) => handleItemDrop(e, child.id, child.type)}
+          onDrop={(e) => handleItemDrop(e, child.id, child.type, child.metadata?.floorPlanId || null)}
+          onDragEnd={stopAutoScroll}
         >
           <button
             className={`lp-toggle-btn ${child.visible === false ? 'lp-toggle-btn--hidden' : ''}`}
@@ -879,7 +984,7 @@ export default function LayersPanel({ tick = 0 }) {
           <button className="lp-add-btn" onClick={addLayer}>＋ Add</button>
         </div>
       </div>
-      <div className="lp-content">
+      <div className="lp-content" ref={lpContentRef} onDragOver={handlePanelAutoScroll}>
         {layers.map(layer => {
           const isActive = layer.id === activeLayerId;
           const isExpanded = expandedLayers[layer.id];
@@ -897,6 +1002,7 @@ export default function LayersPanel({ tick = 0 }) {
               onDragStart={(e) => handleDragStart(e, layer.id)}
               onDragOver={handleDragOver}
               onDrop={(e) => handleDrop(e, layer.id)}
+              onDragEnd={stopAutoScroll}
             >
               <div className={`lp-layer-row ${selectedLayerItemId === layer.id ? 'lp-layer-row--active' : ''}`}>
                 <div className="lp-drag-handle" title="Drag to reorder">
@@ -987,7 +1093,7 @@ export default function LayersPanel({ tick = 0 }) {
               </div>
 
               {isExpanded && children.length > 0 && (
-                <div className="lp-children">
+                <div className="lp-children" onDragOver={handleDragOver} onDrop={handleItemDropToRoot}>
                   {(() => {
                     const fps = deriveFloorPlanFolders(children, layer.id);
                     const rootPolys = children.filter(c => c.type === 'polygon' && !c.metadata?.floorPlanId);
@@ -1011,6 +1117,8 @@ export default function LayersPanel({ tick = 0 }) {
                                   handleLayerClick(layer.id);
                                   toggleExpand(folderId, e);
                                 }}
+                                onDragOver={handleDragOver}
+                                onDrop={(e) => handleItemDropToFloorplan(e, fp.id)}
                               >
                                 <button
                                   className={`lp-toggle-btn ${fp.visible === false ? 'lp-toggle-btn--hidden' : ''}`}
@@ -1112,7 +1220,7 @@ export default function LayersPanel({ tick = 0 }) {
                                 </button>
                               </div>
                               {isExpanded && (
-                                <div className="lp-nested-children">
+                                <div className="lp-nested-children" onDragOver={handleDragOver} onDrop={(e) => handleItemDropToFloorplan(e, fp.id)}>
                                   {fp.noImage ? (
                                     <div className="lp-child-item lp-child-item--noimage" style={{ paddingLeft: 24, cursor: 'default' }}>
                                       <div className="lp-child-icon"><FloorPlanIcon /></div>
@@ -1164,6 +1272,8 @@ export default function LayersPanel({ tick = 0 }) {
                                                   handleLayerClick(layer.id);
                                                   toggleExpand(plotsFolderId, e);
                                                 }}
+                                                onDragOver={handleDragOver}
+                                                onDrop={(e) => handleItemDropToFloorplan(e, fp.id)}
                                               >
                                                 <button
                                                   className={`lp-toggle-btn ${!allPlotsVisible ? 'lp-toggle-btn--hidden' : ''}`}
@@ -1224,7 +1334,7 @@ export default function LayersPanel({ tick = 0 }) {
                                                 </button>
                                               </div>
                                               {isPlotsExpanded && (
-                                                <div className="lp-nested-children">
+                                                <div className="lp-nested-children" onDragOver={handleDragOver} onDrop={(e) => handleItemDropToFloorplan(e, fp.id)}>
                                                   {nestedPlots.map(nc => renderItemChild(nc, layer, false, true, isPlotsUniform))}
                                                 </div>
                                               )}

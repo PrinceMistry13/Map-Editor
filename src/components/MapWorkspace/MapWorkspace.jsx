@@ -864,6 +864,12 @@ function MapWorkspaceInner() {
     let finalColor = activeLayerColor;
     if (targetCategory === 'landmark') {
       finalColor = '#8B5CF6'; // predefined purple for all landmark polygons
+    } else if (category === 'project' && !(selectedFloorplanFolder && floorplanExists)) {
+      const openFpId = openFloorPlanFolderIdRef.current;
+      const openFpStillExists = openFpId && floorPlanManagerRef.current?.getState().some(f => f.id === openFpId);
+      if (openFpStillExists) {
+        targetMetadata.floorPlanId = openFpId;
+      }
     } else if (category === 'unit' || category === 'pending-unit') {
       finalColor = '#ff6b6b';
 
@@ -1034,11 +1040,13 @@ function MapWorkspaceInner() {
       let targetLayerId = activeLayerIdRef.current;
       let targetMetadata = {};
       const selectedItem = selectedLayerItemIdRef.current;
+      let selectedFloorplanFolder = false;
       if (selectedItem) {
         if (selectedItem.startsWith('folder-') || selectedItem.startsWith('plots-')) {
           const fpId = selectedItem.replace(/^(folder|plots)-/, '');
           const fp = floorPlanManagerRef.current?.getState().find(f => f.id === fpId);
           if (fp) {
+            selectedFloorplanFolder = true;
             targetLayerId = fp.layerId || targetLayerId;
             targetMetadata = { floorPlanId: fpId };
           }
@@ -1046,11 +1054,25 @@ function MapWorkspaceInner() {
           targetLayerId = selectedItem;
         }
       }
+      // Resolved live at pin-creation time (inside PinManager), not here —
+      // so switching the open floorplan folder while the Pin tool stays
+      // armed tags new pins with whichever folder is open *when placed*,
+      // not whichever was open when the tool was activated.
+      let getFallbackFloorPlanId = null;
+      let colorLookupFloorPlanId = targetMetadata.floorPlanId || null;
+      if (!selectedFloorplanFolder) {
+        getFallbackFloorPlanId = () => {
+          const openFpId = openFloorPlanFolderIdRef.current;
+          const openFpStillExists = openFpId && floorPlanManagerRef.current?.getState().some(f => f.id === openFpId);
+          return openFpStillExists ? openFpId : undefined;
+        };
+        colorLookupFloorPlanId = getFallbackFloorPlanId();
+      }
       let finalColor = activeLayerColor;
       let targetContainerId = null;
 
-      if (targetMetadata.floorPlanId) {
-        targetContainerId = `folder-${targetMetadata.floorPlanId}`;
+      if (colorLookupFloorPlanId) {
+        targetContainerId = `folder-${colorLookupFloorPlanId}`;
       } else if (selectedItem && selectedItem.startsWith('layer-')) {
         targetContainerId = selectedItem;
       } else if (targetLayerId) {
@@ -1071,7 +1093,7 @@ function MapWorkspaceInner() {
         }
       }
 
-      pinManagerRef.current?.armPlacement(finalColor, targetLayerId, targetMetadata);
+      pinManagerRef.current?.armPlacement(finalColor, targetLayerId, targetMetadata, getFallbackFloorPlanId);
     }
 
     // ── Polygon ────────────────────────────────────────────────────────────
